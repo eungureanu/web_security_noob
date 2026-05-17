@@ -1,0 +1,1 @@
+Web application working with sensitive personal data, built with the help of Claude Opus 4.5. Sandbox project meant to explore Copilot and Agent usage and best practices without affecting the main analisys.

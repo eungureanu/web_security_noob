@@ -1,0 +1,25 @@
+{
+  "name": "web_security_test",
+  "version": "1.0.0",
+  "description": "test project for web security test",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "dev": "npm run dev:backend"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eungureanu/web_security_test.git"
+  },
+  "author": "EmmaG",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.6"
+  }
+}
