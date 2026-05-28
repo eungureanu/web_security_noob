@@ -1,75 +1,26 @@
-import express from 'express';
-import { News } from '../models/news.model.js';
-import { Tax } from '../models/tax.model.js';
-import { Appointment } from '../models/appointment.model.js';
-import { Citizen } from '../models/citizen.model.js';
-import { Property } from '../models/property.model.js';
-import { Request } from '../models/request.model.js';
-import { PublicDocument } from '../models/publicDocument.model.js';
+import { Router } from 'express';
+import { validatePagination, sanitizeQueryParams } from '../middleware/security.js';
+import newsRoutes from './news.routes.js';
+import taxRoutes from './tax.routes.js';
+import propertyRoutes from './property.routes.js';
+import appointmentRoutes from './appointment.routes.js';
+import requestRoutes from './request.routes.js';
+import publicDocumentRoutes from './publicDocument.routes.js';
+import citizenRoutes from './citizen.routes.js';
 
-const router = express.Router();
+const router = Router();
 
-router.get('/news', async (req, res) => {
-    try {
-        const news = await News.find().sort({ createdAt: -1 });
-        res.json(news);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
+// the sanitizeQueryParams and validatePagination middleware methods are applied on every request on all routes
+router.use(sanitizeQueryParams);
+router.use(validatePagination);
 
-router.get('/taxes', async (req, res) => {
-    try {
-        const taxes = await Tax.find().sort({ dueDate: -1 });
-        res.json(taxes);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-router.get('/appointments', async (req, res) => {
-    try {
-        const appointments = await Appointment.find().sort({ date: -1 });
-        res.json(appointments);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-router.get('/citizens', async (req, res) => {
-    try {
-        const citizens = await Citizen.find().sort({ lastName: 1 });
-        res.json(citizens);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-router.get('/properties', async (req, res) => {
-    try {
-        const properties = await Property.find().sort({ createdAt: -1 });
-        res.json(properties);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-router.get('/requests', async (req, res) => {
-    try {
-        const requests = await Request.find().sort({ createdAt: -1 });
-        res.json(requests);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-router.get('/documents', async (req, res) => {
-    try {
-        const documents = await PublicDocument.find().sort({ createdAt: -1 });
-        res.json(documents);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
+// the routes are defined in the respective files
+router.use('/news', newsRoutes);
+router.use('/taxes', taxRoutes);
+router.use('/properties', propertyRoutes);
+router.use('/appointments', appointmentRoutes);
+router.use('/citizens', citizenRoutes);
+router.use('/requests', requestRoutes);
+router.use('/public-documents', publicDocumentRoutes);
 
 export default router;
