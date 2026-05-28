@@ -2,15 +2,15 @@ import { News } from '../models/news.model.js';
 
 export async function showAllNews(req, res, next) {
     try {
-        const { limit, skip } = req.pagination; // get the limit and skip parameters from the request
+        const { limit, skip } = req.pagination;
 
         const [items, total] = await Promise.all([
-            News.find({}) // find all news items - no filter is applied
-                .sort({ createdAt: -1 }) // sort the news items by createdAt in descending order
-                .skip(skip) // skip the number of items specified by the skip parameter
-                .limit(limit) // limit the number of items to the number specified by the limit parameter
-                .select('title content author createdAt'), // select the title, content, author, and createdAt fields
-            News.countDocuments({}) // count the number of news items
+            News.find({})
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .select('title content author createdAt'),
+            News.countDocuments({})
         ]);
 
         res.json({
@@ -23,6 +23,60 @@ export async function showAllNews(req, res, next) {
             }
         });
     } catch (err) {
-        next(err); // pass the error to the error handling middleware
+        next(err);
+    }
+}
+
+export async function createNews(req, res, next) {
+    try {
+        const { title, content, author } = req.body;
+        
+        if (!title || !content || !author) {
+            return res.status(400).json({ error: 'Title, content, and author are required.' });
+        }
+
+        const news = new News({ title, content, author });
+        await news.save();
+        
+        res.status(201).json({ data: news });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function updateNews(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { title, content, author } = req.body;
+
+        const news = await News.findByIdAndUpdate(
+            id,
+            { title, content, author },
+            { new: true, runValidators: true }
+        );
+
+        if (!news) {
+            return res.status(404).json({ error: 'News item not found.' });
+        }
+
+        res.json({ data: news });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function deleteNews(req, res, next) {
+    try {
+        const { id } = req.params;
+        
+        const news = await News.findByIdAndDelete(id);
+
+        if (!news) {
+            return res.status(404).json({ error: 'News item not found.' });
+        }
+
+        res.json({ message: 'News item deleted successfully.' });
+    } catch (err) {
+        next(err);
     }
 }

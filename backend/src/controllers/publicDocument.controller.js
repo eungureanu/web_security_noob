@@ -32,3 +32,57 @@ export async function showAllPublicDocuments(req, res, next) {
         next(err);
     }
 }
+
+export async function createPublicDocument(req, res, next) {
+    try {
+        const { title, description, category, fileUrl, uploadedBy } = req.body;
+        
+        if (!title || !category || !fileUrl || !uploadedBy) {
+            return res.status(400).json({ error: 'Title, category, fileUrl, and uploadedBy are required.' });
+        }
+
+        const publicDocument = new PublicDocument({ title, description, category, fileUrl, uploadedBy });
+        await publicDocument.save();
+        
+        res.status(201).json({ data: publicDocument });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function updatePublicDocument(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { title, description, category, fileUrl, uploadedBy } = req.body;
+
+        const publicDocument = await PublicDocument.findByIdAndUpdate(
+            id,
+            { title, description, category, fileUrl, uploadedBy },
+            { new: true, runValidators: true }
+        );
+
+        if (!publicDocument) {
+            return res.status(404).json({ error: 'Public document not found.' });
+        }
+
+        res.json({ data: publicDocument });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function deletePublicDocument(req, res, next) {
+    try {
+        const { id } = req.params;
+        
+        const publicDocument = await PublicDocument.findByIdAndDelete(id);
+
+        if (!publicDocument) {
+            return res.status(404).json({ error: 'Public document not found.' });
+        }
+
+        res.json({ message: 'Public document deleted successfully.' });
+    } catch (err) {
+        next(err);
+    }
+}
