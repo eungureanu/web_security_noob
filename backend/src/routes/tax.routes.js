@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { validateObjectId } from '../middleware/security.js';
-import { showAllTaxes } from '../controllers/tax.controller.js';
+import { showAllTaxes, createTax, updateTax, deleteTax } from '../controllers/tax.controller.js';
 
 const router = Router();
 
-// the validateObjectId middleware method is applied per route where the citizenId is expected in the URL path or query string
 router.get('/', validateObjectId('citizenId'), showAllTaxes);
+router.post('/', createTax);
+router.put('/:id', updateTax);
+router.delete('/:id', deleteTax);
 
 export default router;

@@ -2,18 +2,18 @@ import { Appointment } from '../models/appointment.model.js';
 
 export async function showAllAppointments(req, res, next) {
     try {
-        const { limit, skip } = req.pagination; // get the limit and skip parameters from the request
-        const { citizenId } = req.query; // get the citizenId from the query string
+        const { limit, skip } = req.pagination;
+        const { citizenId } = req.query;
 
-        const filter = citizenId ? { citizenId } : {}; // if citizenId is provided, filter the appointments by citizenId, otherwise no filter is applied
+        const filter = citizenId ? { citizenId } : {};
 
         const [items, total] = await Promise.all([
             Appointment.find(filter)
-                .sort({ date: -1 }) // sort the appointments by date in descending order
-                .skip(skip) // skip the number of items specified by the skip parameter
-                .limit(limit) // limit the number of items to the number specified by the limit parameter
-                .select('department date purpose status'), // select the department, date, purpose, and status fields
-            Appointment.countDocuments(filter) // count the number of appointments
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(limit)
+                .select('department date purpose status'),
+            Appointment.countDocuments(filter)
         ]);
 
         res.json({
@@ -26,6 +26,60 @@ export async function showAllAppointments(req, res, next) {
             }
         });
     } catch (err) {
-        next(err); // pass the error to the error handling middleware
+        next(err);
+    }
+}
+
+export async function createAppointment(req, res, next) {
+    try {
+        const { citizenId, department, date, purpose, status } = req.body;
+        
+        if (!citizenId || !department || !date || !purpose) {
+            return res.status(400).json({ error: 'CitizenId, department, date, and purpose are required.' });
+        }
+
+        const appointment = new Appointment({ citizenId, department, date, purpose, status });
+        await appointment.save();
+        
+        res.status(201).json({ data: appointment });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function updateAppointment(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { citizenId, department, date, purpose, status } = req.body;
+
+        const appointment = await Appointment.findByIdAndUpdate(
+            id,
+            { citizenId, department, date, purpose, status },
+            { new: true, runValidators: true }
+        );
+
+        if (!appointment) {
+            return res.status(404).json({ error: 'Appointment not found.' });
+        }
+
+        res.json({ data: appointment });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function deleteAppointment(req, res, next) {
+    try {
+        const { id } = req.params;
+        
+        const appointment = await Appointment.findByIdAndDelete(id);
+
+        if (!appointment) {
+            return res.status(404).json({ error: 'Appointment not found.' });
+        }
+
+        res.json({ message: 'Appointment deleted successfully.' });
+    } catch (err) {
+        next(err);
     }
 }

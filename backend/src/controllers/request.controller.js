@@ -29,3 +29,57 @@ export async function showAllRequests(req, res, next) {
         next(err);
     }
 }
+
+export async function createRequest(req, res, next) {
+    try {
+        const { citizenId, documentType, proofFiles, status, adminComment, legalResponseDays } = req.body;
+        
+        if (!citizenId || !documentType || !legalResponseDays) {
+            return res.status(400).json({ error: 'CitizenId, documentType, and legalResponseDays are required.' });
+        }
+
+        const request = new Request({ citizenId, documentType, proofFiles, status, adminComment, legalResponseDays });
+        await request.save();
+        
+        res.status(201).json({ data: request });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function updateRequest(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { citizenId, documentType, proofFiles, status, adminComment, legalResponseDays } = req.body;
+
+        const request = await Request.findByIdAndUpdate(
+            id,
+            { citizenId, documentType, proofFiles, status, adminComment, legalResponseDays },
+            { new: true, runValidators: true }
+        );
+
+        if (!request) {
+            return res.status(404).json({ error: 'Request not found.' });
+        }
+
+        res.json({ data: request });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function deleteRequest(req, res, next) {
+    try {
+        const { id } = req.params;
+        
+        const request = await Request.findByIdAndDelete(id);
+
+        if (!request) {
+            return res.status(404).json({ error: 'Request not found.' });
+        }
+
+        res.json({ message: 'Request deleted successfully.' });
+    } catch (err) {
+        next(err);
+    }
+}
