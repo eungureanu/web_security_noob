@@ -1,9 +1,21 @@
-import { LitElement, html, unsafeCSS, type TemplateResult } from "lit";
+import { LitElement, html, unsafeCSS, type TemplateResult, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import tailwindStyles from "../styles/tailwind.css?inline";
-
-const API_BASE = "http://localhost:4000/api";
+import { API_BASE_URL, assetUrl } from "../config/api.config";
+import {
+  type ApiResponse,
+  type AppointmentItem,
+  type CitizenItem,
+  type DataTabId,
+  type NewsItem,
+  type PropertyItem,
+  type PublicDocumentItem,
+  type RequestItem,
+  type TabDataMap,
+  type TaxItem,
+  TAB_ENDPOINTS,
+} from "../types/pmsb.types";
 
 const HOME_CONTENT = html`
   <section class="max-w-3xl">
@@ -38,23 +50,50 @@ const HOME_CONTENT = html`
   </section>
 `;
 
-interface TabConfig {
-  id: string;
-  label: string;
-  endpoint?: string;
-  content?: TemplateResult;
-}
-
-const TABS: TabConfig[] = [
-  { id: "home", label: "Home", content: HOME_CONTENT },
-  { id: "stiri", label: "Stiri", endpoint: "news" },
-  { id: "formulare-tip", label: "Formulare Tip", endpoint: "documents" },
-  { id: "programari", label: "Programari", endpoint: "appointments" },
-  { id: "date-personale", label: "Date personale", endpoint: "citizens" },
-  { id: "proprietati", label: "Proprietati", endpoint: "properties" },
-  { id: "cereri", label: "Cereri", endpoint: "requests" },
-  { id: "taxe-impozite", label: "Taxe si Impozite", endpoint: "taxes" },
+const TABS: { id: string; label: string; isStatic?: boolean }[] = [
+  { id: "home", label: "Home", isStatic: true },
+  { id: "stiri", label: "Stiri" },
+  { id: "formulare-tip", label: "Formulare Tip" },
+  { id: "programari", label: "Programari" },
+  { id: "date-personale", label: "Date personale" },
+  { id: "proprietati", label: "Proprietati" },
+  { id: "cereri", label: "Cereri" },
+  { id: "taxe-impozite", label: "Taxe si Impozite" },
 ];
+
+const PROPERTY_TYPE_LABELS: Record<PropertyItem["propertyType"], string> = {
+  house: "Casă",
+  land: "Teren",
+  car: "Autovehicul",
+};
+
+const APPOINTMENT_STATUS_LABELS: Record<AppointmentItem["status"], string> = {
+  scheduled: "Programat",
+  completed: "Finalizat",
+  cancelled: "Anulat",
+};
+
+const APPOINTMENT_STATUS_COLORS: Record<AppointmentItem["status"], string> = {
+  scheduled: "bg-blue-100 text-blue-700",
+  completed: "bg-green-100 text-green-700",
+  cancelled: "bg-red-100 text-red-700",
+};
+
+const REQUEST_STATUS_LABELS: Record<RequestItem["status"], string> = {
+  pending: "În procesare",
+  approved: "Aprobat",
+  rejected: "Respins",
+};
+
+const REQUEST_STATUS_COLORS: Record<RequestItem["status"], string> = {
+  pending: "bg-yellow-100 text-yellow-700",
+  approved: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
+};
+
+function isDataTabId(tabId: string): tabId is DataTabId {
+  return tabId in TAB_ENDPOINTS;
+}
 
 export class PmsbHome extends LitElement {
   static styles = unsafeCSS(tailwindStyles);
@@ -63,185 +102,220 @@ export class PmsbHome extends LitElement {
   private activeTab = TABS[0].id;
 
   @state()
-  private data: Record<string, unknown[]> = {};
+  private tabData: TabDataMap[DataTabId][] = [];
 
   @state()
-  private loading = false;
+  private isLoading = false;
 
   @state()
-  private error: string | null = null;
+  private errorMessage = "";
 
-  private async fetchData(endpoint: string) {
-    if (this.data[endpoint]) return;
-    
-    this.loading = true;
-    this.error = null;
-    
+  private async fetchTabData<K extends DataTabId>(tabId: K): Promise<void> {
+    const endpoint = TAB_ENDPOINTS[tabId];
+
+    this.isLoading = true;
+    this.errorMessage = "";
+    this.tabData = [];
+
     try {
-      const response = await fetch(`${API_BASE}/${endpoint}`);
-      if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-      const result = await response.json();
-      this.data = { ...this.data, [endpoint]: result };
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : "Failed to fetch data";
+      const response = await fetch(`${API_BASE_URL}/${endpoint}`);
+
+      if (!response.ok) {
+        this.errorMessage = "Nu s-au putut încărca datele. Vă rugăm încercați din nou.";
+        return;
+      }
+
+      const result: ApiResponse<TabDataMap[K]> = await response.json();
+      this.tabData = result.data;
+    } catch {
+      this.errorMessage = "Eroare de conexiune. Verificați conexiunea la internet.";
     } finally {
-      this.loading = false;
+      this.isLoading = false;
     }
   }
 
-  private async handleTabClick(tab: TabConfig) {
-    this.activeTab = tab.id;
-    if (tab.endpoint) {
-      await this.fetchData(tab.endpoint);
+  private handleTabClick(tabId: string): void {
+    this.activeTab = tabId;
+    const clickedTab = TABS.find((t) => t.id === tabId);
+    if (clickedTab && !clickedTab.isStatic && isDataTabId(tabId)) {
+      void this.fetchTabData(tabId);
     }
   }
 
-  private renderNewsItem(item: Record<string, unknown>) {
+  private renderNewsItem(news: NewsItem): TemplateResult {
     return html`
-      <div class="bg-white rounded-lg border border-slate-200 p-4">
-        <h3 class="font-semibold text-slate-800">${item.title}</h3>
-        <p class="text-sm text-slate-600 mt-1">${item.content}</p>
-        <p class="text-xs text-slate-400 mt-2">By ${item.author}</p>
-      </div>
+      <li class="bg-white rounded-lg border border-slate-200 p-4">
+        <h3 class="font-semibold text-slate-800">${news.title}</h3>
+        <p class="text-slate-600 mt-1 text-sm">${news.content}</p>
+        <p class="text-slate-400 text-xs mt-2">De: ${news.author} | ${new Date(news.createdAt).toLocaleDateString("ro-RO")}</p>
+      </li>
     `;
   }
 
-  private renderTaxItem(item: Record<string, unknown>) {
-    const dueDate = new Date(item.dueDate as string).toLocaleDateString("ro-RO");
+  private renderTaxItem(tax: TaxItem): TemplateResult {
     return html`
-      <div class="bg-white rounded-lg border border-slate-200 p-4">
-        <div class="flex justify-between items-start">
-          <h3 class="font-semibold text-slate-800">${item.title}</h3>
-          <span class="px-2 py-1 text-xs rounded ${item.status === 'paid' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}">
-            ${item.status}
+      <li class="bg-white rounded-lg border border-slate-200 p-4 flex justify-between items-center">
+        <div>
+          <h3 class="font-semibold text-slate-800">${tax.title}</h3>
+          <p class="text-slate-500 text-sm">Scadent: ${new Date(tax.dueDate).toLocaleDateString("ro-RO")}</p>
+        </div>
+        <div class="text-right">
+          <p class="font-bold text-lg">${tax.amount} RON</p>
+          <span class="text-xs px-2 py-1 rounded ${tax.status === "paid" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}">
+            ${tax.status === "paid" ? "Plătit" : "În așteptare"}
           </span>
         </div>
-        <p class="text-lg font-bold text-slate-900 mt-2">${item.amount} RON</p>
-        <p class="text-sm text-slate-500 mt-1">Scadent: ${dueDate}</p>
-      </div>
+      </li>
     `;
   }
 
-  private renderAppointmentItem(item: Record<string, unknown>) {
-    const date = new Date(item.date as string).toLocaleDateString("ro-RO");
+  private renderPropertyItem(property: PropertyItem): TemplateResult {
     return html`
-      <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <li class="bg-white rounded-lg border border-slate-200 p-4">
         <div class="flex justify-between items-start">
-          <h3 class="font-semibold text-slate-800">${item.department}</h3>
-          <span class="px-2 py-1 text-xs rounded ${
-            item.status === 'completed' ? 'bg-green-100 text-green-800' : 
-            item.status === 'cancelled' ? 'bg-red-100 text-red-800' : 
-            'bg-blue-100 text-blue-800'
-          }">
-            ${item.status}
-          </span>
+          <div>
+            <h3 class="font-semibold text-slate-800">${property.address}</h3>
+            ${property.details ? html`<p class="text-slate-600 text-sm mt-1">${property.details}</p>` : nothing}
+          </div>
+          <span class="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded">${PROPERTY_TYPE_LABELS[property.propertyType]}</span>
         </div>
-        <p class="text-sm text-slate-600 mt-1">${item.purpose}</p>
-        <p class="text-sm text-slate-500 mt-2">Data: ${date}</p>
-      </div>
+      </li>
     `;
   }
 
-  private renderCitizenItem(item: Record<string, unknown>) {
+  private renderAppointmentItem(appointment: AppointmentItem): TemplateResult {
     return html`
-      <div class="bg-white rounded-lg border border-slate-200 p-4">
-        <h3 class="font-semibold text-slate-800">${item.firstName} ${item.lastName}</h3>
-        <p class="text-sm text-slate-600 mt-1">${item.address}</p>
-        <p class="text-sm text-slate-500 mt-1">Tel: ${item.phone}</p>
-      </div>
-    `;
-  }
-
-  private renderPropertyItem(item: Record<string, unknown>) {
-    return html`
-      <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <li class="bg-white rounded-lg border border-slate-200 p-4">
         <div class="flex justify-between items-start">
-          <h3 class="font-semibold text-slate-800">${item.address}</h3>
-          <span class="px-2 py-1 text-xs rounded bg-slate-100 text-slate-800">${item.propertyType}</span>
+          <div>
+            <h3 class="font-semibold text-slate-800">${appointment.department}</h3>
+            <p class="text-slate-600 text-sm mt-1">${appointment.purpose}</p>
+            <p class="text-slate-400 text-xs mt-2">${new Date(appointment.date).toLocaleDateString("ro-RO", { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+          </div>
+          <span class="text-xs px-2 py-1 rounded ${APPOINTMENT_STATUS_COLORS[appointment.status]}">${APPOINTMENT_STATUS_LABELS[appointment.status]}</span>
         </div>
-        ${item.details ? html`<p class="text-sm text-slate-600 mt-1">${item.details}</p>` : ''}
-      </div>
+      </li>
     `;
   }
 
-  private renderRequestItem(item: Record<string, unknown>) {
+  private renderCitizenItem(citizen: CitizenItem): TemplateResult {
     return html`
-      <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <li class="bg-white rounded-lg border border-slate-200 p-4">
+        <h3 class="font-semibold text-slate-800">${citizen.firstName} ${citizen.lastName}</h3>
+      </li>
+    `;
+  }
+
+  private renderRequestItem(request: RequestItem): TemplateResult {
+    return html`
+      <li class="bg-white rounded-lg border border-slate-200 p-4">
         <div class="flex justify-between items-start">
-          <h3 class="font-semibold text-slate-800">${item.documentType}</h3>
-          <span class="px-2 py-1 text-xs rounded ${
-            item.status === 'approved' ? 'bg-green-100 text-green-800' : 
-            item.status === 'rejected' ? 'bg-red-100 text-red-800' : 
-            'bg-yellow-100 text-yellow-800'
-          }">
-            ${item.status}
-          </span>
+          <div>
+            <h3 class="font-semibold text-slate-800">${request.documentType}</h3>
+            ${request.adminComment ? html`<p class="text-slate-600 text-sm mt-1">${request.adminComment}</p>` : nothing}
+            <p class="text-slate-400 text-xs mt-2">Depus: ${new Date(request.createdAt).toLocaleDateString("ro-RO")} | Răspuns în: ${request.legalResponseDays} zile</p>
+          </div>
+          <span class="text-xs px-2 py-1 rounded ${REQUEST_STATUS_COLORS[request.status]}">${REQUEST_STATUS_LABELS[request.status]}</span>
         </div>
-        <p class="text-sm text-slate-500 mt-1">Termen legal: ${item.legalResponseDays} zile</p>
-        ${item.adminComment ? html`<p class="text-sm text-slate-600 mt-1 italic">${item.adminComment}</p>` : ''}
-      </div>
+      </li>
     `;
   }
 
-  private renderDocumentItem(item: Record<string, unknown>) {
+  private renderPublicDocumentItem(document: PublicDocumentItem): TemplateResult {
+    const downloadUrl = assetUrl(document.fileUrl);
     return html`
-      <div class="bg-white rounded-lg border border-slate-200 p-4">
-        <div class="flex justify-between items-start">
-          <h3 class="font-semibold text-slate-800">${item.title}</h3>
-          <span class="px-2 py-1 text-xs rounded bg-slate-100 text-slate-800">${item.category}</span>
+      <li class="bg-white rounded-lg border border-slate-200 p-4">
+        <div class="flex justify-between items-start gap-3">
+          <div>
+            <h3 class="font-semibold text-slate-800">${document.title}</h3>
+            ${document.description ? html`<p class="text-slate-600 text-sm mt-1">${document.description}</p>` : nothing}
+          </div>
+          <span class="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded shrink-0">${document.category}</span>
         </div>
-        ${item.description ? html`<p class="text-sm text-slate-600 mt-1">${item.description}</p>` : ''}
-        <p class="text-xs text-slate-400 mt-2">Uploaded by ${item.uploadedBy}</p>
-      </div>
+        <a
+          href="${downloadUrl}"
+          download
+          target="_blank"
+          rel="noopener noreferrer"
+          class="mt-3 inline-block px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
+        >
+          Descarcă
+        </a>
+      </li>
     `;
   }
 
-  private renderDataList(endpoint: string): TemplateResult {
-    const items = (this.data[endpoint] || []) as Record<string, unknown>[];
-    
-    if (this.loading) {
-      return html`<p class="text-center text-slate-500 py-8">Loading...</p>`;
+  private renderDataTabContent(): TemplateResult {
+    switch (this.activeTab as DataTabId) {
+      case "stiri":
+        return html`
+          <ul class="space-y-3 max-w-3xl">
+            ${repeat(this.tabData as NewsItem[], (item) => item._id, (item) => this.renderNewsItem(item))}
+          </ul>
+        `;
+      case "taxe-impozite":
+        return html`
+          <ul class="space-y-3 max-w-3xl">
+            ${repeat(this.tabData as TaxItem[], (item) => item._id, (item) => this.renderTaxItem(item))}
+          </ul>
+        `;
+      case "proprietati":
+        return html`
+          <ul class="space-y-3 max-w-3xl">
+            ${repeat(this.tabData as PropertyItem[], (item) => item._id, (item) => this.renderPropertyItem(item))}
+          </ul>
+        `;
+      case "programari":
+        return html`
+          <ul class="space-y-3 max-w-3xl">
+            ${repeat(this.tabData as AppointmentItem[], (item) => item._id, (item) => this.renderAppointmentItem(item))}
+          </ul>
+        `;
+      case "cereri":
+        return html`
+          <ul class="space-y-3 max-w-3xl">
+            ${repeat(this.tabData as RequestItem[], (item) => item._id, (item) => this.renderRequestItem(item))}
+          </ul>
+        `;
+      case "formulare-tip":
+        return html`
+          <ul class="space-y-3 max-w-3xl">
+            ${repeat(this.tabData as PublicDocumentItem[], (item) => item._id, (item) => this.renderPublicDocumentItem(item))}
+          </ul>
+        `;
+      case "date-personale":
+        return html`
+          <ul class="space-y-3 max-w-3xl">
+            ${repeat(this.tabData as CitizenItem[], (item) => item._id, (item) => this.renderCitizenItem(item))}
+          </ul>
+        `;
     }
-    
-    if (this.error) {
-      return html`<p class="text-center text-red-500 py-8">${this.error}</p>`;
-    }
-    
-    if (items.length === 0) {
-      return html`<p class="text-center text-slate-500 py-8">No data available</p>`;
-    }
-
-    const renderers: Record<string, (item: Record<string, unknown>) => TemplateResult> = {
-      news: this.renderNewsItem,
-      taxes: this.renderTaxItem,
-      appointments: this.renderAppointmentItem,
-      citizens: this.renderCitizenItem,
-      properties: this.renderPropertyItem,
-      requests: this.renderRequestItem,
-      documents: this.renderDocumentItem,
-    };
-
-    const renderer = renderers[endpoint] || ((item: Record<string, unknown>) => html`<pre>${JSON.stringify(item, null, 2)}</pre>`);
-
-    return html`
-      <div class="space-y-4 max-w-3xl">
-        ${repeat(items, (item: Record<string, unknown>) => (item._id as string) || Math.random(), (item: Record<string, unknown>) => renderer(item))}
-      </div>
-    `;
   }
 
-  private renderTabContent() {
-    const activeTabConfig = TABS.find((tab) => tab.id === this.activeTab) ?? TABS[0];
-    
-    if (activeTabConfig.content) {
-      return activeTabConfig.content;
+  private renderTabContent(): TemplateResult {
+    const tab = TABS.find((t) => t.id === this.activeTab);
+
+    if (!tab) return HOME_CONTENT;
+
+    if (tab.id === "home") return HOME_CONTENT;
+
+    // if (tab.id === "date-personale") {
+    //   return html`<p class="py-16 text-center text-xl text-slate-500">Această funcționalitate necesită autentificare.</p>`;
+    // }
+
+    if (this.isLoading) {
+      return html`<p class="py-16 text-center text-xl text-slate-500">Se încarcă...</p>`;
     }
-    
-    if (activeTabConfig.endpoint) {
-      return this.renderDataList(activeTabConfig.endpoint);
+
+    if (this.errorMessage) {
+      return html`<p class="py-16 text-center text-xl text-red-500">${this.errorMessage}</p>`;
     }
-    
-    return html`<p class="py-16 text-center text-2xl font-light text-slate-500">Coming Soon</p>`;
+
+    if (this.tabData.length === 0) {
+      return html`<p class="py-16 text-center text-xl text-slate-500">Nu există date disponibile.</p>`;
+    }
+
+    return this.renderDataTabContent();
   }
 
   render() {
@@ -261,7 +335,7 @@ export class PmsbHome extends LitElement {
                 (tab) => html`
                   <li>
                     <button
-                      @click=${() => this.handleTabClick(tab)}
+                      @click=${() => this.handleTabClick(tab.id)}
                       class="px-3 py-2.5 text-sm font-medium rounded-t-md transition-colors cursor-pointer
                         ${this.activeTab === tab.id
                           ? "bg-slate-800 text-white"
