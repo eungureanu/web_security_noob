@@ -4,8 +4,17 @@ export async function showAllAppointments(req, res, next) {
     try {
         const { limit, skip } = req.pagination;
         const { citizenId } = req.query;
+        const user = req.user;
 
-        const filter = citizenId ? { citizenId } : {};
+        let filter = {};
+
+        // Citizens can only see their own appointments
+        if (user.role === 'citizen') {
+            filter = { citizenId: user.citizenId };
+        } else if (citizenId) {
+            // Employees can filter by citizenId if provided
+            filter = { citizenId };
+        }
 
         const [items, total] = await Promise.all([
             Appointment.find(filter)
@@ -33,6 +42,12 @@ export async function showAllAppointments(req, res, next) {
 export async function createAppointment(req, res, next) {
     try {
         const { citizenId, department, date, purpose, status } = req.sanitizedBody;
+        const user = req.user;
+
+        // Citizens can only create appointments for themselves
+        if (user.role === 'citizen' && user.citizenId?.toString() !== citizenId) {
+            return res.status(403).json({ error: 'Nu puteți crea programări pentru alți cetățeni.' });
+        }
         
         const appointment = new Appointment({ 
             citizenId, 
@@ -43,7 +58,7 @@ export async function createAppointment(req, res, next) {
         });
         const saved = await appointment.save();
         
-        console.log(`[CREATE] Appointment created with ID ${saved._id} from IP ${req.ip}`);
+        console.log(`[CREATE] Appointment created with ID ${saved._id} by ${user.email} from IP ${req.ip}`);
         
         res.status(201).json({
             data: {
@@ -64,9 +79,26 @@ export async function updateAppointment(req, res, next) {
     try {
         const { id } = req.params;
         const updateData = req.sanitizedBody;
+        const user = req.user;
         
         if (Object.keys(updateData).length === 0) {
             return res.status(400).json({ error: 'No valid fields to update.' });
+        }
+
+        // First, fetch the appointment to check ownership
+        const existing = await Appointment.findById(id);
+        if (!existing) {
+            return res.status(404).json({ error: 'Resource not found.' });
+        }
+
+        // Citizens can only update their own appointments
+        if (user.role === 'citizen' && existing.citizenId?.toString() !== user.citizenId?.toString()) {
+            return res.status(403).json({ error: 'Nu puteți modifica programările altor cetățeni.' });
+        }
+
+        // Tax employees cannot edit appointments
+        if (user.role === 'taxes') {
+            return res.status(403).json({ error: 'Nu aveți permisiunea de a modifica programări.' });
         }
         
         const updated = await Appointment.findByIdAndUpdate(
@@ -75,11 +107,7 @@ export async function updateAppointment(req, res, next) {
             { new: true, runValidators: true }
         ).select('citizenId department date purpose status');
         
-        if (!updated) {
-            return res.status(404).json({ error: 'Resource not found.' });
-        }
-        
-        console.log(`[UPDATE] Appointment ${id} updated from IP ${req.ip}`);
+        console.log(`[UPDATE] Appointment ${id} updated by ${user.email} (${user.role}) from IP ${req.ip}`);
         
         res.json({ data: updated });
     } catch (err) {
@@ -90,14 +118,27 @@ export async function updateAppointment(req, res, next) {
 export async function deleteAppointment(req, res, next) {
     try {
         const { id } = req.params;
-        
-        const deleted = await Appointment.findByIdAndDelete(id);
-        
-        if (!deleted) {
+        const user = req.user;
+
+        // First, fetch the appointment to check ownership
+        const existing = await Appointment.findById(id);
+        if (!existing) {
             return res.status(404).json({ error: 'Resource not found.' });
         }
+
+        // Citizens can only delete their own appointments
+        if (user.role === 'citizen' && existing.citizenId?.toString() !== user.citizenId?.toString()) {
+            return res.status(403).json({ error: 'Nu puteți șterge programările altor cetățeni.' });
+        }
+
+        // Tax employees cannot delete appointments
+        if (user.role === 'taxes') {
+            return res.status(403).json({ error: 'Nu aveți permisiunea de a șterge programări.' });
+        }
         
-        console.log(`[DELETE] Appointment ${id} deleted from IP ${req.ip}`);
+        await Appointment.findByIdAndDelete(id);
+        
+        console.log(`[DELETE] Appointment ${id} deleted by ${user.email} (${user.role}) from IP ${req.ip}`);
         
         res.json({ message: 'Resource deleted successfully.' });
     } catch (err) {
