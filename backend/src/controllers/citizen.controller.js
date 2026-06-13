@@ -29,19 +29,30 @@ export async function showAllCitizens(req, res, next) {
 
 export async function createCitizen(req, res, next) {
     try {
-        const { firstName, lastName, CNP, idCardNumber, address, phone } = req.body;
+        const { firstName, lastName, CNP, idCardNumber, address, phone } = req.sanitizedBody;
         
-        if (!firstName || !lastName || !CNP || !idCardNumber || !address || !phone) {
-            return res.status(400).json({ error: 'All fields are required.' });
-        }
-
-        const citizen = new Citizen({ firstName, lastName, CNP, idCardNumber, address, phone });
-        await citizen.save();
+        const citizen = new Citizen({ 
+            firstName, 
+            lastName, 
+            CNP, 
+            idCardNumber, 
+            address, 
+            phone 
+        });
+        const saved = await citizen.save();
         
-        res.status(201).json({ data: citizen });
+        console.log(`[CREATE] Citizen created with ID ${saved._id} from IP ${req.ip}`);
+        
+        res.status(201).json({
+            data: {
+                _id: saved._id,
+                firstName: saved.firstName,
+                lastName: saved.lastName
+            }
+        });
     } catch (err) {
         if (err.code === 11000) {
-            return res.status(400).json({ error: 'A citizen with this CNP already exists.' });
+            return res.status(400).json({ error: 'A record with this identifier already exists.' });
         }
         next(err);
     }
@@ -50,22 +61,28 @@ export async function createCitizen(req, res, next) {
 export async function updateCitizen(req, res, next) {
     try {
         const { id } = req.params;
-        const { firstName, lastName, CNP, idCardNumber, address, phone } = req.body;
-
-        const citizen = await Citizen.findByIdAndUpdate(
-            id,
-            { firstName, lastName, CNP, idCardNumber, address, phone },
-            { new: true, runValidators: true }
-        );
-
-        if (!citizen) {
-            return res.status(404).json({ error: 'Citizen not found.' });
+        const updateData = req.sanitizedBody;
+        
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ error: 'No valid fields to update.' });
         }
-
-        res.json({ data: citizen });
+        
+        const updated = await Citizen.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).select('_id firstName lastName');
+        
+        if (!updated) {
+            return res.status(404).json({ error: 'Resource not found.' });
+        }
+        
+        console.log(`[UPDATE] Citizen ${id} updated from IP ${req.ip}`);
+        
+        res.json({ data: updated });
     } catch (err) {
         if (err.code === 11000) {
-            return res.status(400).json({ error: 'A citizen with this CNP already exists.' });
+            return res.status(400).json({ error: 'A record with this identifier already exists.' });
         }
         next(err);
     }
@@ -75,13 +92,15 @@ export async function deleteCitizen(req, res, next) {
     try {
         const { id } = req.params;
         
-        const citizen = await Citizen.findByIdAndDelete(id);
-
-        if (!citizen) {
-            return res.status(404).json({ error: 'Citizen not found.' });
+        const deleted = await Citizen.findByIdAndDelete(id);
+        
+        if (!deleted) {
+            return res.status(404).json({ error: 'Resource not found.' });
         }
-
-        res.json({ message: 'Citizen deleted successfully.' });
+        
+        console.log(`[DELETE] Citizen ${id} deleted from IP ${req.ip}`);
+        
+        res.json({ message: 'Resource deleted successfully.' });
     } catch (err) {
         next(err);
     }

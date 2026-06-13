@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { validatePagination, sanitizeQueryParams } from '../middleware/security.js';
+import { decodeUrlParams, validatePagination, sanitizeQueryParams } from '../middleware/security.js';
 import newsRoutes from './news.routes.js';
 import taxRoutes from './tax.routes.js';
 import propertyRoutes from './property.routes.js';
@@ -10,7 +10,8 @@ import citizenRoutes from './citizen.routes.js';
 
 const router = Router();
 
-// the sanitizeQueryParams and validatePagination middleware methods are applied on every request on all routes
+// decode URL params first, then validate and sanitize query parameters on every request
+router.use(decodeUrlParams);
 router.use(sanitizeQueryParams);
 router.use(validatePagination);
 

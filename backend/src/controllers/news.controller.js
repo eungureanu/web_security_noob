@@ -29,16 +29,22 @@ export async function showAllNews(req, res, next) {
 
 export async function createNews(req, res, next) {
     try {
-        const { title, content, author } = req.body;
+        const { title, content, author } = req.sanitizedBody;
         
-        if (!title || !content || !author) {
-            return res.status(400).json({ error: 'Title, content, and author are required.' });
-        }
-
         const news = new News({ title, content, author });
-        await news.save();
+        const saved = await news.save();
         
-        res.status(201).json({ data: news });
+        console.log(`[CREATE] News item created with ID ${saved._id} from IP ${req.ip}`);
+        
+        res.status(201).json({
+            data: {
+                _id: saved._id,
+                title: saved.title,
+                content: saved.content,
+                author: saved.author,
+                createdAt: saved.createdAt
+            }
+        });
     } catch (err) {
         next(err);
     }
@@ -47,19 +53,25 @@ export async function createNews(req, res, next) {
 export async function updateNews(req, res, next) {
     try {
         const { id } = req.params;
-        const { title, content, author } = req.body;
-
-        const news = await News.findByIdAndUpdate(
-            id,
-            { title, content, author },
-            { new: true, runValidators: true }
-        );
-
-        if (!news) {
-            return res.status(404).json({ error: 'News item not found.' });
+        const updateData = req.sanitizedBody;
+        
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ error: 'No valid fields to update.' });
         }
-
-        res.json({ data: news });
+        
+        const updated = await News.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).select('title content author createdAt');
+        
+        if (!updated) {
+            return res.status(404).json({ error: 'Resource not found.' });
+        }
+        
+        console.log(`[UPDATE] News item ${id} updated from IP ${req.ip}`);
+        
+        res.json({ data: updated });
     } catch (err) {
         next(err);
     }
@@ -69,13 +81,15 @@ export async function deleteNews(req, res, next) {
     try {
         const { id } = req.params;
         
-        const news = await News.findByIdAndDelete(id);
-
-        if (!news) {
-            return res.status(404).json({ error: 'News item not found.' });
+        const deleted = await News.findByIdAndDelete(id);
+        
+        if (!deleted) {
+            return res.status(404).json({ error: 'Resource not found.' });
         }
-
-        res.json({ message: 'News item deleted successfully.' });
+        
+        console.log(`[DELETE] News item ${id} deleted from IP ${req.ip}`);
+        
+        res.json({ message: 'Resource deleted successfully.' });
     } catch (err) {
         next(err);
     }

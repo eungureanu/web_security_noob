@@ -1,6 +1,207 @@
 import mongoose from 'mongoose';
 
-const requestCount = new Map(); // data structure for storing key-value pairs; value is an object containing count and windowStart
+const requestCount = new Map();
+
+const DANGEROUS_VALUE_PATTERN = /[\$\{\}]/;
+const DANGEROUS_KEY_PATTERN = /[\$\{\}.\[\]]/;
+const SAFE_FIELD_KEY_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+const MAX_STRING_LENGTH = 1000;
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB for file uploads
+
+/**
+ * Returns true when a field name could be used for MongoDB operator or dot-notation injection.
+ * @param key - The field or query parameter name.
+ * @returns true if the key is unsafe, false otherwise.
+ */
+export function isDangerousFieldKey(key) {
+    return typeof key !== 'string'
+        || DANGEROUS_KEY_PATTERN.test(key)
+        || !SAFE_FIELD_KEY_PATTERN.test(key);
+}
+
+/**
+ * Returns true when a string value contains MongoDB operator symbols.
+ * @param value - The value to inspect.
+ * @returns true if the value contains dangerous characters, false otherwise.
+ */
+export function containsDangerousDbOperators(value) {
+    return typeof value === 'string' && DANGEROUS_VALUE_PATTERN.test(value);
+}
+
+/**
+ * Recursively checks user input for operator symbols, unsafe keys, or nested objects/arrays
+ * that could be passed through to MongoDB queries.
+ * @param value - The value to inspect.
+ * @returns true if dangerous input is detected, false otherwise.
+ */
+function containsDangerousNestedInput(value) {
+    if (containsDangerousDbOperators(value)) {
+        return true;
+    }
+
+    if (Array.isArray(value)) {
+        return value.some((item) =>
+            typeof item === 'object' && item !== null
+                ? containsDangerousNestedInput(item)
+                : containsDangerousDbOperators(item)
+        );
+    }
+
+    if (value !== null && typeof value === 'object') {
+        return Object.entries(value).some(
+            ([key, nestedValue]) =>
+                isDangerousFieldKey(key) || containsDangerousNestedInput(nestedValue)
+        );
+    }
+
+    return false;
+}
+
+/**
+ * Validates query parameter values. Only scalar strings, numbers, and booleans are allowed.
+ * @param value - The query parameter value.
+ * @param keyPath - Human-readable path used in security logs.
+ * @param req - The Express request object.
+ * @returns true if the value is safe, false otherwise.
+ */
+function isSafeQueryValue(value, keyPath, req) {
+    if (value === null || value === undefined) {
+        return true;
+    }
+
+    if (typeof value === 'string') {
+        if (containsDangerousDbOperators(value)) {
+            console.log(`[SECURITY] Blocked suspicious query param from IP ${req.ip}: ${keyPath}=${value}`);
+            return false;
+        }
+        return true;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return true;
+    }
+
+    console.log(`[SECURITY] Blocked non-scalar query param from IP ${req.ip}: ${keyPath}`);
+    return false;
+}
+
+/**
+ * Validates that a value is a non-empty string within safe limits and contains no injection patterns.
+ * @param value - The value to validate.
+ * @param maxLength - Maximum allowed length.
+ * @returns true if valid, false otherwise.
+ */
+export function isValidString(value, maxLength = MAX_STRING_LENGTH) {
+    return typeof value === 'string' && 
+           value.trim().length > 0 && 
+           value.length <= maxLength &&
+           !containsDangerousDbOperators(value);
+}
+
+/**
+ * Validates that a value is a positive number.
+ * @param value - The value to validate.
+ * @returns true if valid, false otherwise.
+ */
+export function isValidPositiveNumber(value) {
+    return typeof value === 'number' && !isNaN(value) && value >= 0;
+}
+
+/**
+ * Validates that a value is a valid date string.
+ * @param value - The value to validate.
+ * @returns true if valid, false otherwise.
+ */
+export function isValidDate(value) {
+    if (typeof value !== 'string') return false;
+    const date = new Date(value);
+    return !isNaN(date.getTime());
+}
+
+/**
+ * Validates that a value is one of the allowed enum values.
+ * @param value - The value to validate.
+ * @param allowedValues - Array of allowed values.
+ * @returns true if valid, false otherwise.
+ */
+export function isValidEnum(value, allowedValues) {
+    return allowedValues.includes(value);
+}
+
+/**
+ * Encodes URL parameters according to RFC 3986.
+ * @param str - The string to encode.
+ * @returns The percent-encoded string.
+ */
+export function encodeRFC3986(str) {
+    return encodeURIComponent(str).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+/**
+ * Decodes URL parameters according to RFC 3986.
+ * @param str - The encoded string.
+ * @returns The decoded string.
+ */
+export function decodeRFC3986(str) {
+    try {
+        return decodeURIComponent(str);
+    } catch {
+        return str;
+    }
+}
+
+/**
+ * Creates a validation middleware for request body fields with field allowlists.
+ * @param allowedFields - Array of field names allowed in the request body.
+ * @param requiredFields - Array of field names that must be present (for create operations).
+ * @param validators - Object mapping field names to validation functions.
+ * @returns Express middleware function.
+ */
+export function validateRequestBody(allowedFields, requiredFields = [], validators = {}) {
+    return function(req, res, next) {
+        if (!req.body || typeof req.body !== 'object') {
+            console.log(`[VALIDATION] Invalid request body from IP ${req.ip}`);
+            return res.status(400).json({ error: 'Invalid request format.' });
+        }
+
+        const sanitizedBody = {};
+        
+        for (const field of requiredFields) {
+            if (req.body[field] === undefined || req.body[field] === null || req.body[field] === '') {
+                console.log(`[VALIDATION] Missing required field '${field}' from IP ${req.ip}`);
+                return res.status(400).json({ error: 'Missing required fields.' });
+            }
+        }
+
+        for (const [key, value] of Object.entries(req.body)) {
+            if (isDangerousFieldKey(key)) {
+                console.log(`[SECURITY] Blocked dangerous field key '${key}' from IP ${req.ip}`);
+                return res.status(400).json({ error: 'Invalid input detected.' });
+            }
+
+            if (!allowedFields.includes(key)) {
+                console.log(`[VALIDATION] Blocked disallowed field '${key}' from IP ${req.ip}`);
+                continue;
+            }
+
+            if (containsDangerousNestedInput(value)) {
+                console.log(`[SECURITY] Blocked dangerous pattern in field '${key}' from IP ${req.ip}`);
+                return res.status(400).json({ error: 'Invalid input detected.' });
+            }
+
+            if (validators[key] && !validators[key](value)) {
+                console.log(`[VALIDATION] Invalid value for field '${key}' from IP ${req.ip}`);
+                return res.status(400).json({ error: 'Invalid field values.' });
+            }
+
+            sanitizedBody[key] = value;
+        }
+
+        req.sanitizedBody = sanitizedBody;
+        next();
+    };
+}
+
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // time window for rate limiting (1 minute)
 const RATE_LIMIT_MAX_REQUESTS = 100; // maximum number of requests allowed within the time window
 
@@ -91,6 +292,30 @@ export function handleErrors(err, req, res, next) {
 }
 
 /**
+ * Decodes path and query parameter values according to RFC 3986 before validation.
+ * @param req - The Express request object.
+ * @param res - The Express response object.
+ * @param next - The next middleware function.
+ */
+export function decodeUrlParams(req, res, next) {
+    for (const key of Object.keys(req.params)) {
+        const value = req.params[key];
+
+        if (typeof value === 'string') {
+            req.params[key] = decodeRFC3986(value);
+        }
+    }
+
+    for (const [key, value] of Object.entries(req.query)) {
+        if (typeof value === 'string') {
+            req.query[key] = decodeRFC3986(value);
+        }
+    }
+
+    next();
+}
+
+/**
  * Validates request parameters which are expected to be MongoDB ObjectIds.
  * @param paramName - The name of the query or route parameter to validate.
  * @returns Express middleware function that validates the selected parameter.
@@ -122,24 +347,20 @@ export function validateObjectId(paramName) {
 }
 
 /**
- * Rejects query strings that contain characters commonly used in injection attacks, such as $ or {}.
+ * Rejects query strings whose keys or values contain MongoDB operators, dot notation,
+ * bracket notation, or other patterns commonly used in injection attacks.
  * @param req - The Express request object.
  * @param res - The Express response object.
  * @param next - The next middleware function.
  */
 export function sanitizeQueryParams(req, res, next) {
-    
-    // define the regex pattern to detect dangerous characters. In this case, we are looking for $ and {} which are commonly used in injection attacks
-    const dangerousPatterns = /[\$\{\}]/;
-
     for (const [key, value] of Object.entries(req.query)) {
-        // check if the query parameter value is a string and contains any dangerous characters
-        if (typeof value === 'string' && dangerousPatterns.test(value)) {
+        if (isDangerousFieldKey(key)) {
+            console.log(`[SECURITY] Blocked suspicious query param key from IP ${req.ip}: ${key}`);
+            return res.status(400).json({ error: 'Invalid query parameters.' });
+        }
 
-            // if it does, log the attempt to the terminal 
-            console.log(`[SECURITY] Blocked suspicious query param from IP ${req.ip}: ${key}=${value}`);
-
-            // and return a 400 Bad Request response with a generic error message
+        if (!isSafeQueryValue(value, key, req)) {
             return res.status(400).json({ error: 'Invalid query parameters.' });
         }
     }
