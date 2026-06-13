@@ -2,20 +2,31 @@ import { LitElement, html, unsafeCSS, type TemplateResult, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import tailwindStyles from "../styles/tailwind.css?inline";
-import { API_BASE_URL, assetUrl } from "../config/api.config";
+import { apiUrl, assetUrl } from "../config/api.config";
 import {
   type ApiResponse,
+  type ApiSingleResponse,
   type AppointmentItem,
+  type AppointmentInput,
   type CitizenItem,
+  type CitizenInput,
   type DataTabId,
   type NewsItem,
+  type NewsInput,
   type PropertyItem,
+  type PropertyInput,
   type PublicDocumentItem,
+  type PublicDocumentInput,
   type RequestItem,
+  type RequestInput,
   type TabDataMap,
   type TaxItem,
+  type TaxInput,
   TAB_ENDPOINTS,
 } from "../types/pmsb.types";
+
+type FormMode = "create" | "edit" | null;
+type AnyItem = NewsItem | TaxItem | PropertyItem | AppointmentItem | CitizenItem | RequestItem | PublicDocumentItem;
 
 const HOME_CONTENT = html`
   <section class="max-w-3xl">
@@ -95,10 +106,6 @@ function isDataTabId(tabId: string): tabId is DataTabId {
   return tabId in TAB_ENDPOINTS;
 }
 
-interface FormData {
-  [key: string]: string | number;
-}
-
 export class PmsbHome extends LitElement {
   static styles = unsafeCSS(tailwindStyles);
 
@@ -115,19 +122,16 @@ export class PmsbHome extends LitElement {
   private errorMessage = "";
 
   @state()
-  private showModal = false;
+  private formMode: FormMode = null;
 
   @state()
-  private modalMode: "add" | "edit" = "add";
+  private editingItem: AnyItem | null = null;
 
   @state()
-  private editingItem: TabDataMap[DataTabId] | null = null;
+  private isSubmitting = false;
 
   @state()
-  private formData: FormData = {};
-
-  @state()
-  private citizensList: CitizenItem[] = [];
+  private citizens: CitizenItem[] = [];
 
   private async fetchTabData<K extends DataTabId>(tabId: K): Promise<void> {
     const endpoint = TAB_ENDPOINTS[tabId];
@@ -137,7 +141,7 @@ export class PmsbHome extends LitElement {
     this.tabData = [];
 
     try {
-      const response = await fetch(`${API_BASE_URL}/${endpoint}`);
+      const response = await fetch(apiUrl(endpoint));
 
       if (!response.ok) {
         this.errorMessage = "Nu s-au putut încărca datele. Vă rugăm încercați din nou.";
@@ -155,14 +159,704 @@ export class PmsbHome extends LitElement {
 
   private async fetchCitizens(): Promise<void> {
     try {
-      const response = await fetch(`${API_BASE_URL}/citizens`);
+      const response = await fetch(apiUrl("citizens"));
       if (response.ok) {
         const result: ApiResponse<CitizenItem> = await response.json();
-        this.citizensList = result.data;
+        this.citizens = result.data;
       }
     } catch {
       console.error("Failed to fetch citizens");
     }
+  }
+
+  private async createItem<T>(endpoint: string, data: T): Promise<boolean> {
+    this.isSubmitting = true;
+    try {
+      const response = await fetch(apiUrl(endpoint), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        this.errorMessage = error.error || "Eroare la crearea resursei.";
+        return false;
+      }
+
+      return true;
+    } catch {
+      this.errorMessage = "Eroare de conexiune. Verificați conexiunea la internet.";
+      return false;
+    } finally {
+      this.isSubmitting = false;
+    }
+  }
+
+  private async updateItem<T>(endpoint: string, id: string, data: T): Promise<boolean> {
+    this.isSubmitting = true;
+    try {
+      const response = await fetch(apiUrl(endpoint, id), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        this.errorMessage = error.error || "Eroare la actualizarea resursei.";
+        return false;
+      }
+
+      return true;
+    } catch {
+      this.errorMessage = "Eroare de conexiune. Verificați conexiunea la internet.";
+      return false;
+    } finally {
+      this.isSubmitting = false;
+    }
+  }
+
+  private async deleteItem(endpoint: string, id: string): Promise<boolean> {
+    if (!confirm("Sigur doriți să ștergeți această înregistrare?")) {
+      return false;
+    }
+
+    this.isSubmitting = true;
+    try {
+      const response = await fetch(apiUrl(endpoint, id), {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        this.errorMessage = error.error || "Eroare la ștergerea resursei.";
+        return false;
+      }
+
+      return true;
+    } catch {
+      this.errorMessage = "Eroare de conexiune. Verificați conexiunea la internet.";
+      return false;
+    } finally {
+      this.isSubmitting = false;
+    }
+  }
+
+  private openCreateForm(): void {
+    this.formMode = "create";
+    this.editingItem = null;
+    this.errorMessage = "";
+    if (this.activeTab !== "stiri" && this.activeTab !== "formulare-tip" && this.activeTab !== "date-personale") {
+      void this.fetchCitizens();
+    }
+  }
+
+  private openEditForm(item: AnyItem): void {
+    this.formMode = "edit";
+    this.editingItem = item;
+    this.errorMessage = "";
+    if (this.activeTab !== "stiri" && this.activeTab !== "formulare-tip" && this.activeTab !== "date-personale") {
+      void this.fetchCitizens();
+    }
+  }
+
+  private closeForm(): void {
+    this.formMode = null;
+    this.editingItem = null;
+    this.errorMessage = "";
+  }
+
+  private async handleDelete(id: string): Promise<void> {
+    if (!isDataTabId(this.activeTab)) return;
+    
+    const endpoint = TAB_ENDPOINTS[this.activeTab];
+    const success = await this.deleteItem(endpoint, id);
+    
+    if (success) {
+      void this.fetchTabData(this.activeTab);
+    }
+  }
+
+  private async handleFormSubmit(e: Event): Promise<void> {
+    e.preventDefault();
+    if (!isDataTabId(this.activeTab)) return;
+
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+    const endpoint = TAB_ENDPOINTS[this.activeTab];
+
+    let success = false;
+
+    switch (this.activeTab) {
+      case "stiri": {
+        const data: NewsInput = {
+          title: (formData.get("title") as string).trim(),
+          content: (formData.get("content") as string).trim(),
+          author: (formData.get("author") as string).trim(),
+        };
+        success = this.formMode === "create"
+          ? await this.createItem(endpoint, data)
+          : await this.updateItem(endpoint, (this.editingItem as NewsItem)._id, data);
+        break;
+      }
+      case "taxe-impozite": {
+        const data: TaxInput = {
+          citizenId: formData.get("citizenId") as string,
+          title: (formData.get("title") as string).trim(),
+          amount: parseFloat(formData.get("amount") as string),
+          dueDate: formData.get("dueDate") as string,
+          status: (formData.get("status") as TaxInput["status"]) || "pending",
+        };
+        const propertyId = formData.get("propertyId") as string;
+        if (propertyId) data.propertyId = propertyId;
+        success = this.formMode === "create"
+          ? await this.createItem(endpoint, data)
+          : await this.updateItem(endpoint, (this.editingItem as TaxItem)._id, data);
+        break;
+      }
+      case "proprietati": {
+        const data: PropertyInput = {
+          citizenId: formData.get("citizenId") as string,
+          address: (formData.get("address") as string).trim(),
+          propertyType: formData.get("propertyType") as PropertyInput["propertyType"],
+        };
+        const details = (formData.get("details") as string)?.trim();
+        if (details) data.details = details;
+        success = this.formMode === "create"
+          ? await this.createItem(endpoint, data)
+          : await this.updateItem(endpoint, (this.editingItem as PropertyItem)._id, data);
+        break;
+      }
+      case "programari": {
+        const data: AppointmentInput = {
+          citizenId: formData.get("citizenId") as string,
+          department: (formData.get("department") as string).trim(),
+          date: formData.get("date") as string,
+          purpose: (formData.get("purpose") as string).trim(),
+          status: (formData.get("status") as AppointmentInput["status"]) || "scheduled",
+        };
+        success = this.formMode === "create"
+          ? await this.createItem(endpoint, data)
+          : await this.updateItem(endpoint, (this.editingItem as AppointmentItem)._id, data);
+        break;
+      }
+      case "date-personale": {
+        const data: CitizenInput = {
+          firstName: (formData.get("firstName") as string).trim(),
+          lastName: (formData.get("lastName") as string).trim(),
+          CNP: (formData.get("CNP") as string).trim(),
+          idCardNumber: (formData.get("idCardNumber") as string).trim(),
+          address: (formData.get("address") as string).trim(),
+          phone: (formData.get("phone") as string).trim(),
+        };
+        success = this.formMode === "create"
+          ? await this.createItem(endpoint, data)
+          : await this.updateItem(endpoint, (this.editingItem as CitizenItem)._id, data);
+        break;
+      }
+      case "cereri": {
+        const data: RequestInput = {
+          citizenId: formData.get("citizenId") as string,
+          documentType: (formData.get("documentType") as string).trim(),
+          legalResponseDays: parseInt(formData.get("legalResponseDays") as string, 10),
+          status: (formData.get("status") as RequestInput["status"]) || "pending",
+        };
+        const adminComment = (formData.get("adminComment") as string)?.trim();
+        if (adminComment) data.adminComment = adminComment;
+        success = this.formMode === "create"
+          ? await this.createItem(endpoint, data)
+          : await this.updateItem(endpoint, (this.editingItem as RequestItem)._id, data);
+        break;
+      }
+      case "formulare-tip": {
+        const data: PublicDocumentInput = {
+          title: (formData.get("title") as string).trim(),
+          category: (formData.get("category") as string).trim(),
+          fileUrl: (formData.get("fileUrl") as string).trim(),
+          uploadedBy: (formData.get("uploadedBy") as string).trim(),
+        };
+        const description = (formData.get("description") as string)?.trim();
+        if (description) data.description = description;
+        success = this.formMode === "create"
+          ? await this.createItem(endpoint, data)
+          : await this.updateItem(endpoint, (this.editingItem as PublicDocumentItem)._id, data);
+        break;
+      }
+    }
+
+    if (success) {
+      this.closeForm();
+      void this.fetchTabData(this.activeTab);
+    }
+  }
+
+  private renderActionButtons(item: AnyItem): TemplateResult {
+    return html`
+      <div class="flex gap-2 mt-3">
+        <button
+          @click=${() => this.openEditForm(item)}
+          class="px-3 py-1 text-sm font-medium text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+        >
+          Editează
+        </button>
+        <button
+          @click=${() => this.handleDelete(item._id)}
+          class="px-3 py-1 text-sm font-medium text-red-600 bg-red-50 rounded hover:bg-red-100 transition-colors"
+          ?disabled=${this.isSubmitting}
+        >
+          Șterge
+        </button>
+      </div>
+    `;
+  }
+
+  private renderCitizenSelect(selectedId?: string): TemplateResult {
+    return html`
+      <label class="block">
+        <span class="text-sm font-medium text-slate-700">Cetățean *</span>
+        <select
+          name="citizenId"
+          required
+          class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+        >
+          <option value="">Selectați cetățeanul</option>
+          ${repeat(
+            this.citizens,
+            (c) => c._id,
+            (c) => html`
+              <option value=${c._id} ?selected=${c._id === selectedId}>
+                ${c.firstName} ${c.lastName}
+              </option>
+            `
+          )}
+        </select>
+      </label>
+    `;
+  }
+
+  private renderFormModal(): TemplateResult | typeof nothing {
+    if (!this.formMode || !isDataTabId(this.activeTab)) return nothing;
+
+    const title = this.formMode === "create" ? "Adaugă" : "Editează";
+    
+    return html`
+      <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-center p-4 border-b border-slate-200">
+            <h3 class="text-lg font-semibold text-slate-800">${title}</h3>
+            <button
+              @click=${() => this.closeForm()}
+              class="text-slate-400 hover:text-slate-600 text-2xl leading-none"
+            >
+              &times;
+            </button>
+          </div>
+          
+          <form @submit=${this.handleFormSubmit} class="p-4 space-y-4">
+            ${this.errorMessage
+              ? html`<p class="text-red-500 text-sm">${this.errorMessage}</p>`
+              : nothing}
+            
+            ${this.renderFormFields()}
+            
+            <div class="flex justify-end gap-3 pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                @click=${() => this.closeForm()}
+                class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors"
+              >
+                Anulează
+              </button>
+              <button
+                type="submit"
+                ?disabled=${this.isSubmitting}
+                class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                ${this.isSubmitting ? "Se salvează..." : "Salvează"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderFormFields(): TemplateResult {
+    switch (this.activeTab as DataTabId) {
+      case "stiri": {
+        const item = this.editingItem as NewsItem | null;
+        return html`
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Titlu *</span>
+            <input
+              type="text"
+              name="title"
+              required
+              maxlength="200"
+              .value=${item?.title ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Conținut *</span>
+            <textarea
+              name="content"
+              required
+              maxlength="5000"
+              rows="4"
+              .value=${item?.content ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            ></textarea>
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Autor *</span>
+            <input
+              type="text"
+              name="author"
+              required
+              maxlength="100"
+              .value=${item?.author ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+        `;
+      }
+      case "taxe-impozite": {
+        const item = this.editingItem as TaxItem | null;
+        return html`
+          ${this.renderCitizenSelect(item?.citizenId)}
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Titlu *</span>
+            <input
+              type="text"
+              name="title"
+              required
+              maxlength="200"
+              .value=${item?.title ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Sumă (RON) *</span>
+            <input
+              type="number"
+              name="amount"
+              required
+              min="0"
+              step="0.01"
+              .value=${item?.amount?.toString() ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Data scadenței *</span>
+            <input
+              type="date"
+              name="dueDate"
+              required
+              .value=${item?.dueDate ? item.dueDate.split("T")[0] : ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Status</span>
+            <select
+              name="status"
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="pending" ?selected=${item?.status === "pending" || !item}>În așteptare</option>
+              <option value="paid" ?selected=${item?.status === "paid"}>Plătit</option>
+            </select>
+          </label>
+        `;
+      }
+      case "proprietati": {
+        const item = this.editingItem as PropertyItem | null;
+        return html`
+          ${this.renderCitizenSelect(item?.citizenId)}
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Adresă *</span>
+            <input
+              type="text"
+              name="address"
+              required
+              maxlength="500"
+              .value=${item?.address ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Tip proprietate *</span>
+            <select
+              name="propertyType"
+              required
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="house" ?selected=${item?.propertyType === "house"}>Casă</option>
+              <option value="land" ?selected=${item?.propertyType === "land"}>Teren</option>
+              <option value="car" ?selected=${item?.propertyType === "car"}>Autovehicul</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Detalii</span>
+            <textarea
+              name="details"
+              maxlength="1000"
+              rows="3"
+              .value=${item?.details ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            ></textarea>
+          </label>
+        `;
+      }
+      case "programari": {
+        const item = this.editingItem as AppointmentItem | null;
+        return html`
+          ${this.renderCitizenSelect(item?.citizenId)}
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Departament *</span>
+            <input
+              type="text"
+              name="department"
+              required
+              maxlength="200"
+              .value=${item?.department ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Data și ora *</span>
+            <input
+              type="datetime-local"
+              name="date"
+              required
+              .value=${item?.date ? item.date.slice(0, 16) : ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Scop *</span>
+            <textarea
+              name="purpose"
+              required
+              maxlength="500"
+              rows="3"
+              .value=${item?.purpose ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            ></textarea>
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Status</span>
+            <select
+              name="status"
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="scheduled" ?selected=${item?.status === "scheduled" || !item}>Programat</option>
+              <option value="completed" ?selected=${item?.status === "completed"}>Finalizat</option>
+              <option value="cancelled" ?selected=${item?.status === "cancelled"}>Anulat</option>
+            </select>
+          </label>
+        `;
+      }
+      case "date-personale": {
+        const item = this.editingItem as (CitizenItem & Partial<CitizenInput>) | null;
+        return html`
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Prenume *</span>
+            <input
+              type="text"
+              name="firstName"
+              required
+              maxlength="100"
+              .value=${item?.firstName ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Nume de familie *</span>
+            <input
+              type="text"
+              name="lastName"
+              required
+              maxlength="100"
+              .value=${item?.lastName ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">CNP *</span>
+            <input
+              type="text"
+              name="CNP"
+              required
+              maxlength="13"
+              minlength="13"
+              pattern="[0-9]{13}"
+              title="CNP-ul trebuie să conțină exact 13 cifre"
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Număr carte de identitate *</span>
+            <input
+              type="text"
+              name="idCardNumber"
+              required
+              maxlength="20"
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Adresă *</span>
+            <input
+              type="text"
+              name="address"
+              required
+              maxlength="500"
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Telefon *</span>
+            <input
+              type="tel"
+              name="phone"
+              required
+              maxlength="20"
+              pattern="[0-9+\\-\\s\\(\\)]+"
+              title="Numărul de telefon poate conține doar cifre, spații, +, -, (, )"
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+        `;
+      }
+      case "cereri": {
+        const item = this.editingItem as RequestItem | null;
+        return html`
+          ${this.renderCitizenSelect(item?.citizenId)}
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Tip document *</span>
+            <input
+              type="text"
+              name="documentType"
+              required
+              maxlength="200"
+              .value=${item?.documentType ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Zile legale răspuns *</span>
+            <input
+              type="number"
+              name="legalResponseDays"
+              required
+              min="1"
+              max="365"
+              .value=${item?.legalResponseDays?.toString() ?? "30"}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Status</span>
+            <select
+              name="status"
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="pending" ?selected=${item?.status === "pending" || !item}>În procesare</option>
+              <option value="approved" ?selected=${item?.status === "approved"}>Aprobat</option>
+              <option value="rejected" ?selected=${item?.status === "rejected"}>Respins</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Comentariu administrator</span>
+            <textarea
+              name="adminComment"
+              maxlength="1000"
+              rows="3"
+              .value=${item?.adminComment ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            ></textarea>
+          </label>
+        `;
+      }
+      case "formulare-tip": {
+        const item = this.editingItem as PublicDocumentItem | null;
+        return html`
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Titlu *</span>
+            <input
+              type="text"
+              name="title"
+              required
+              maxlength="200"
+              .value=${item?.title ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Descriere</span>
+            <textarea
+              name="description"
+              maxlength="1000"
+              rows="3"
+              .value=${item?.description ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            ></textarea>
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Categorie *</span>
+            <input
+              type="text"
+              name="category"
+              required
+              maxlength="100"
+              pattern="[a-zA-Z0-9\\s\\-]+"
+              title="Categoria poate conține doar litere, cifre, spații și cratime"
+              .value=${item?.category ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">URL fișier *</span>
+            <input
+              type="text"
+              name="fileUrl"
+              required
+              maxlength="500"
+              .value=${item?.fileUrl ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Încărcat de *</span>
+            <input
+              type="text"
+              name="uploadedBy"
+              required
+              maxlength="100"
+              .value=${item?.uploadedBy ?? ""}
+              class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </label>
+        `;
+      }
+      default:
+        return html``;
+    }
+  }
+
+  private renderAddButton(): TemplateResult {
+    return html`
+      <button
+        @click=${() => this.openCreateForm()}
+        class="mb-4 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors flex items-center gap-2"
+      >
+        <span class="text-lg leading-none">+</span>
+        Adaugă
+      </button>
+    `;
   }
 
   private handleTabClick(tabId: string): void {
@@ -171,329 +865,6 @@ export class PmsbHome extends LitElement {
     if (clickedTab && !clickedTab.isStatic && isDataTabId(tabId)) {
       void this.fetchTabData(tabId);
     }
-  }
-
-  private openAddModal(): void {
-    this.modalMode = "add";
-    this.editingItem = null;
-    this.formData = this.getDefaultFormData();
-    this.showModal = true;
-    if (this.needsCitizenSelect()) {
-      void this.fetchCitizens();
-    }
-  }
-
-  private openEditModal(item: TabDataMap[DataTabId]): void {
-    this.modalMode = "edit";
-    this.editingItem = item;
-    this.formData = this.itemToFormData(item);
-    this.showModal = true;
-    if (this.needsCitizenSelect()) {
-      void this.fetchCitizens();
-    }
-  }
-
-  private closeModal(): void {
-    this.showModal = false;
-    this.editingItem = null;
-    this.formData = {};
-  }
-
-  private needsCitizenSelect(): boolean {
-    return ["programari", "proprietati", "cereri", "taxe-impozite"].includes(this.activeTab);
-  }
-
-  private getDefaultFormData(): FormData {
-    switch (this.activeTab as DataTabId) {
-      case "stiri":
-        return { title: "", content: "", author: "" };
-      case "formulare-tip":
-        return { title: "", description: "", category: "", fileUrl: "", uploadedBy: "" };
-      case "programari":
-        return { citizenId: "", department: "", date: "", purpose: "", status: "scheduled" };
-      case "date-personale":
-        return { firstName: "", lastName: "", CNP: "", idCardNumber: "", address: "", phone: "" };
-      case "proprietati":
-        return { citizenId: "", address: "", propertyType: "house", details: "" };
-      case "cereri":
-        return { citizenId: "", documentType: "", status: "pending", adminComment: "", legalResponseDays: 30 };
-      case "taxe-impozite":
-        return { citizenId: "", title: "", amount: 0, dueDate: "", status: "pending" };
-      default:
-        return {};
-    }
-  }
-
-  private itemToFormData(item: TabDataMap[DataTabId]): FormData {
-    const data: FormData = {};
-    for (const [key, value] of Object.entries(item)) {
-      if (key !== "_id" && key !== "createdAt" && key !== "updatedAt") {
-        if (key === "date" || key === "dueDate") {
-          data[key] = value ? new Date(value as string).toISOString().slice(0, 16) : "";
-        } else {
-          data[key] = value as string | number;
-        }
-      }
-    }
-    return data;
-  }
-
-  private handleInputChange(e: Event): void {
-    const target = e.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-    const { name, value, type } = target;
-    this.formData = {
-      ...this.formData,
-      [name]: type === "number" ? Number(value) : value,
-    };
-  }
-
-  private async handleSubmit(e: Event): Promise<void> {
-    e.preventDefault();
-    
-    if (!isDataTabId(this.activeTab)) return;
-    
-    const endpoint = TAB_ENDPOINTS[this.activeTab];
-    const url = this.modalMode === "edit" && this.editingItem
-      ? `${API_BASE_URL}/${endpoint}/${this.editingItem._id}`
-      : `${API_BASE_URL}/${endpoint}`;
-    
-    const method = this.modalMode === "edit" ? "PUT" : "POST";
-
-    try {
-      const response = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(this.formData),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        this.errorMessage = error.error || "A apărut o eroare.";
-        return;
-      }
-
-      this.closeModal();
-      void this.fetchTabData(this.activeTab);
-    } catch {
-      this.errorMessage = "Eroare de conexiune.";
-    }
-  }
-
-  private async handleDelete(item: TabDataMap[DataTabId]): Promise<void> {
-    if (!confirm("Sigur doriți să ștergeți acest element?")) return;
-    
-    if (!isDataTabId(this.activeTab)) return;
-    
-    const endpoint = TAB_ENDPOINTS[this.activeTab];
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/${endpoint}/${item._id}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        this.errorMessage = "Nu s-a putut șterge elementul.";
-        return;
-      }
-
-      void this.fetchTabData(this.activeTab);
-    } catch {
-      this.errorMessage = "Eroare de conexiune.";
-    }
-  }
-
-  private renderFormField(name: string, label: string, type: string = "text", options?: { value: string; label: string }[]): TemplateResult {
-    if (options) {
-      return html`
-        <div class="mb-4">
-          <label class="block text-sm font-medium text-slate-700 mb-1">${label}</label>
-          <select
-            name=${name}
-            .value=${String(this.formData[name] ?? "")}
-            @change=${this.handleInputChange}
-            class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            required
-          >
-            <option value="">Selectați...</option>
-            ${options.map((opt) => html`<option value=${opt.value}>${opt.label}</option>`)}
-          </select>
-        </div>
-      `;
-    }
-
-    if (type === "textarea") {
-      return html`
-        <div class="mb-4">
-          <label class="block text-sm font-medium text-slate-700 mb-1">${label}</label>
-          <textarea
-            name=${name}
-            .value=${String(this.formData[name] ?? "")}
-            @input=${this.handleInputChange}
-            class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            rows="3"
-            required
-          ></textarea>
-        </div>
-      `;
-    }
-
-    return html`
-      <div class="mb-4">
-        <label class="block text-sm font-medium text-slate-700 mb-1">${label}</label>
-        <input
-          type=${type}
-          name=${name}
-          .value=${String(this.formData[name] ?? "")}
-          @input=${this.handleInputChange}
-          class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          ?required=${name !== "details" && name !== "description" && name !== "adminComment" && name !== "propertyId"}
-        />
-      </div>
-    `;
-  }
-
-  private renderCitizenSelect(): TemplateResult {
-    const options = this.citizensList.map((c) => ({
-      value: c._id,
-      label: `${c.firstName} ${c.lastName}`,
-    }));
-    return this.renderFormField("citizenId", "Cetățean", "select", options);
-  }
-
-  private renderModalForm(): TemplateResult {
-    switch (this.activeTab as DataTabId) {
-      case "stiri":
-        return html`
-          ${this.renderFormField("title", "Titlu")}
-          ${this.renderFormField("content", "Conținut", "textarea")}
-          ${this.renderFormField("author", "Autor")}
-        `;
-      case "formulare-tip":
-        return html`
-          ${this.renderFormField("title", "Titlu")}
-          ${this.renderFormField("description", "Descriere", "textarea")}
-          ${this.renderFormField("category", "Categorie")}
-          ${this.renderFormField("fileUrl", "URL Fișier")}
-          ${this.renderFormField("uploadedBy", "Încărcat de")}
-        `;
-      case "programari":
-        return html`
-          ${this.renderCitizenSelect()}
-          ${this.renderFormField("department", "Departament")}
-          ${this.renderFormField("date", "Data și ora", "datetime-local")}
-          ${this.renderFormField("purpose", "Scopul programării")}
-          ${this.renderFormField("status", "Status", "select", [
-            { value: "scheduled", label: "Programat" },
-            { value: "completed", label: "Finalizat" },
-            { value: "cancelled", label: "Anulat" },
-          ])}
-        `;
-      case "date-personale":
-        return html`
-          ${this.renderFormField("firstName", "Prenume")}
-          ${this.renderFormField("lastName", "Nume")}
-          ${this.renderFormField("CNP", "CNP")}
-          ${this.renderFormField("idCardNumber", "Număr CI")}
-          ${this.renderFormField("address", "Adresă")}
-          ${this.renderFormField("phone", "Telefon")}
-        `;
-      case "proprietati":
-        return html`
-          ${this.renderCitizenSelect()}
-          ${this.renderFormField("address", "Adresă")}
-          ${this.renderFormField("propertyType", "Tip proprietate", "select", [
-            { value: "house", label: "Casă" },
-            { value: "land", label: "Teren" },
-            { value: "car", label: "Autovehicul" },
-          ])}
-          ${this.renderFormField("details", "Detalii", "textarea")}
-        `;
-      case "cereri":
-        return html`
-          ${this.renderCitizenSelect()}
-          ${this.renderFormField("documentType", "Tip document")}
-          ${this.renderFormField("legalResponseDays", "Zile răspuns legal", "number")}
-          ${this.renderFormField("status", "Status", "select", [
-            { value: "pending", label: "În procesare" },
-            { value: "approved", label: "Aprobat" },
-            { value: "rejected", label: "Respins" },
-          ])}
-          ${this.renderFormField("adminComment", "Comentariu admin", "textarea")}
-        `;
-      case "taxe-impozite":
-        return html`
-          ${this.renderCitizenSelect()}
-          ${this.renderFormField("title", "Titlu")}
-          ${this.renderFormField("amount", "Sumă (RON)", "number")}
-          ${this.renderFormField("dueDate", "Data scadentă", "datetime-local")}
-          ${this.renderFormField("status", "Status", "select", [
-            { value: "pending", label: "În așteptare" },
-            { value: "paid", label: "Plătit" },
-          ])}
-        `;
-      default:
-        return html``;
-    }
-  }
-
-  private renderModal(): TemplateResult {
-    if (!this.showModal) return html``;
-
-    const title = this.modalMode === "add" ? "Adaugă element nou" : "Editează element";
-
-    return html`
-      <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click=${this.closeModal}>
-        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto" @click=${(e: Event) => e.stopPropagation()}>
-          <div class="p-6">
-            <div class="flex justify-between items-center mb-4">
-              <h2 class="text-xl font-semibold text-slate-800">${title}</h2>
-              <button @click=${this.closeModal} class="text-slate-400 hover:text-slate-600 cursor-pointer">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                </svg>
-              </button>
-            </div>
-            <form @submit=${this.handleSubmit}>
-              ${this.renderModalForm()}
-              <div class="flex gap-3 mt-6">
-                <button
-                  type="button"
-                  @click=${this.closeModal}
-                  class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-md hover:bg-slate-50 cursor-pointer"
-                >
-                  Anulează
-                </button>
-                <button
-                  type="submit"
-                  class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 cursor-pointer"
-                >
-                  ${this.modalMode === "add" ? "Adaugă" : "Salvează"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  private renderActionButtons(item: TabDataMap[DataTabId]): TemplateResult {
-    return html`
-      <div class="flex gap-2 mt-3">
-        <button
-          @click=${() => this.openEditModal(item)}
-          class="px-3 py-1 text-sm bg-amber-100 text-amber-700 rounded hover:bg-amber-200 cursor-pointer"
-        >
-          Editează
-        </button>
-        <button
-          @click=${() => this.handleDelete(item)}
-          class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 cursor-pointer"
-        >
-          Șterge
-        </button>
-      </div>
-    `;
   }
 
   private renderNewsItem(news: NewsItem): TemplateResult {
@@ -608,70 +979,70 @@ export class PmsbHome extends LitElement {
     `;
   }
 
-  private renderAddButton(): TemplateResult {
-    return html`
-      <button
-        @click=${this.openAddModal}
-        class="mb-4 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center gap-2 cursor-pointer"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-        </svg>
-        Adaugă nou
-      </button>
-    `;
-  }
-
   private renderDataTabContent(): TemplateResult {
     switch (this.activeTab as DataTabId) {
       case "stiri":
         return html`
-          ${this.renderAddButton()}
-          <ul class="space-y-3 max-w-3xl">
-            ${repeat(this.tabData as NewsItem[], (item) => item._id, (item) => this.renderNewsItem(item))}
-          </ul>
+          <div class="max-w-3xl">
+            ${this.renderAddButton()}
+            <ul class="space-y-3">
+              ${repeat(this.tabData as NewsItem[], (item) => item._id, (item) => this.renderNewsItem(item))}
+            </ul>
+          </div>
         `;
       case "taxe-impozite":
         return html`
-          ${this.renderAddButton()}
-          <ul class="space-y-3 max-w-3xl">
-            ${repeat(this.tabData as TaxItem[], (item) => item._id, (item) => this.renderTaxItem(item))}
-          </ul>
+          <div class="max-w-3xl">
+            ${this.renderAddButton()}
+            <ul class="space-y-3">
+              ${repeat(this.tabData as TaxItem[], (item) => item._id, (item) => this.renderTaxItem(item))}
+            </ul>
+          </div>
         `;
       case "proprietati":
         return html`
-          ${this.renderAddButton()}
-          <ul class="space-y-3 max-w-3xl">
-            ${repeat(this.tabData as PropertyItem[], (item) => item._id, (item) => this.renderPropertyItem(item))}
-          </ul>
+          <div class="max-w-3xl">
+            ${this.renderAddButton()}
+            <ul class="space-y-3">
+              ${repeat(this.tabData as PropertyItem[], (item) => item._id, (item) => this.renderPropertyItem(item))}
+            </ul>
+          </div>
         `;
       case "programari":
         return html`
-          ${this.renderAddButton()}
-          <ul class="space-y-3 max-w-3xl">
-            ${repeat(this.tabData as AppointmentItem[], (item) => item._id, (item) => this.renderAppointmentItem(item))}
-          </ul>
+          <div class="max-w-3xl">
+            ${this.renderAddButton()}
+            <ul class="space-y-3">
+              ${repeat(this.tabData as AppointmentItem[], (item) => item._id, (item) => this.renderAppointmentItem(item))}
+            </ul>
+          </div>
         `;
       case "cereri":
         return html`
-          ${this.renderAddButton()}
-          <ul class="space-y-3 max-w-3xl">
-            ${repeat(this.tabData as RequestItem[], (item) => item._id, (item) => this.renderRequestItem(item))}
-          </ul>
+          <div class="max-w-3xl">
+            ${this.renderAddButton()}
+            <ul class="space-y-3">
+              ${repeat(this.tabData as RequestItem[], (item) => item._id, (item) => this.renderRequestItem(item))}
+            </ul>
+          </div>
         `;
       case "formulare-tip":
         return html`
-          ${this.renderAddButton()}
-          <ul class="space-y-3 max-w-3xl">
-            ${repeat(this.tabData as PublicDocumentItem[], (item) => item._id, (item) => this.renderPublicDocumentItem(item))}
-          </ul>
+          <div class="max-w-3xl">
+            ${this.renderAddButton()}
+            <ul class="space-y-3">
+              ${repeat(this.tabData as PublicDocumentItem[], (item) => item._id, (item) => this.renderPublicDocumentItem(item))}
+            </ul>
+          </div>
         `;
       case "date-personale":
         return html`
-          ${this.renderAddButton()}
-          <ul class="space-y-3 max-w-3xl">
-            ${repeat(this.tabData as CitizenItem[], (item) => item._id, (item) => this.renderCitizenItem(item))}
-          </ul>
+          <div class="max-w-3xl">
+            ${this.renderAddButton()}
+            <ul class="space-y-3">
+              ${repeat(this.tabData as CitizenItem[], (item) => item._id, (item) => this.renderCitizenItem(item))}
+            </ul>
+          </div>
         `;
     }
   }
@@ -683,6 +1054,10 @@ export class PmsbHome extends LitElement {
 
     if (tab.id === "home") return HOME_CONTENT;
 
+    // if (tab.id === "date-personale") {
+    //   return html`<p class="py-16 text-center text-xl text-slate-500">Această funcționalitate necesită autentificare.</p>`;
+    // }
+
     if (this.isLoading) {
       return html`<p class="py-16 text-center text-xl text-slate-500">Se încarcă...</p>`;
     }
@@ -692,10 +1067,7 @@ export class PmsbHome extends LitElement {
     }
 
     if (this.tabData.length === 0) {
-      return html`
-        ${this.renderAddButton()}
-        <p class="py-16 text-center text-xl text-slate-500">Nu există date disponibile.</p>
-      `;
+      return html`<p class="py-16 text-center text-xl text-slate-500">Nu există date disponibile.</p>`;
     }
 
     return this.renderDataTabContent();
@@ -736,8 +1108,9 @@ export class PmsbHome extends LitElement {
         <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           ${this.renderTabContent()}
         </main>
+        
+        ${this.renderFormModal()}
       </div>
-      ${this.renderModal()}
     `;
   }
 }

@@ -12,7 +12,7 @@ export async function showAllTaxes(req, res, next) {
                 .sort({ dueDate: -1 })
                 .skip(skip)
                 .limit(limit)
-                .select('title amount dueDate status'),
+                .select('citizenId propertyId title amount dueDate status'),
             Tax.countDocuments(filter)
         ]);
 
@@ -32,16 +32,31 @@ export async function showAllTaxes(req, res, next) {
 
 export async function createTax(req, res, next) {
     try {
-        const { citizenId, propertyId, title, amount, dueDate, status } = req.body;
+        const { citizenId, propertyId, title, amount, dueDate, status } = req.sanitizedBody;
         
-        if (!citizenId || !title || amount === undefined || !dueDate) {
-            return res.status(400).json({ error: 'CitizenId, title, amount, and dueDate are required.' });
-        }
-
-        const tax = new Tax({ citizenId, propertyId, title, amount, dueDate, status });
-        await tax.save();
+        const tax = new Tax({ 
+            citizenId, 
+            propertyId: propertyId || null, 
+            title, 
+            amount, 
+            dueDate, 
+            status: status || 'pending' 
+        });
+        const saved = await tax.save();
         
-        res.status(201).json({ data: tax });
+        console.log(`[CREATE] Tax item created with ID ${saved._id} from IP ${req.ip}`);
+        
+        res.status(201).json({
+            data: {
+                _id: saved._id,
+                citizenId: saved.citizenId,
+                propertyId: saved.propertyId,
+                title: saved.title,
+                amount: saved.amount,
+                dueDate: saved.dueDate,
+                status: saved.status
+            }
+        });
     } catch (err) {
         next(err);
     }
@@ -50,19 +65,25 @@ export async function createTax(req, res, next) {
 export async function updateTax(req, res, next) {
     try {
         const { id } = req.params;
-        const { citizenId, propertyId, title, amount, dueDate, status } = req.body;
-
-        const tax = await Tax.findByIdAndUpdate(
-            id,
-            { citizenId, propertyId, title, amount, dueDate, status },
-            { new: true, runValidators: true }
-        );
-
-        if (!tax) {
-            return res.status(404).json({ error: 'Tax not found.' });
+        const updateData = req.sanitizedBody;
+        
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ error: 'No valid fields to update.' });
         }
-
-        res.json({ data: tax });
+        
+        const updated = await Tax.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).select('citizenId propertyId title amount dueDate status');
+        
+        if (!updated) {
+            return res.status(404).json({ error: 'Resource not found.' });
+        }
+        
+        console.log(`[UPDATE] Tax item ${id} updated from IP ${req.ip}`);
+        
+        res.json({ data: updated });
     } catch (err) {
         next(err);
     }
@@ -72,13 +93,15 @@ export async function deleteTax(req, res, next) {
     try {
         const { id } = req.params;
         
-        const tax = await Tax.findByIdAndDelete(id);
-
-        if (!tax) {
-            return res.status(404).json({ error: 'Tax not found.' });
+        const deleted = await Tax.findByIdAndDelete(id);
+        
+        if (!deleted) {
+            return res.status(404).json({ error: 'Resource not found.' });
         }
-
-        res.json({ message: 'Tax deleted successfully.' });
+        
+        console.log(`[DELETE] Tax item ${id} deleted from IP ${req.ip}`);
+        
+        res.json({ message: 'Resource deleted successfully.' });
     } catch (err) {
         next(err);
     }

@@ -10,6 +10,14 @@ export interface ApiResponse<T> {
   pagination: Pagination;
 }
 
+export interface ApiSingleResponse<T> {
+  data: T;
+}
+
+export interface ApiDeleteResponse {
+  message: string;
+}
+
 export type TaxStatus = "pending" | "paid";
 export type PropertyType = "house" | "land" | "car";
 export type AppointmentStatus = "scheduled" | "completed" | "cancelled";
@@ -21,12 +29,27 @@ export interface CitizenItem {
   lastName: string;
 }
 
+export interface CitizenInput {
+  firstName: string;
+  lastName: string;
+  CNP: string;
+  idCardNumber: string;
+  address: string;
+  phone: string;
+}
+
 export interface NewsItem {
   _id: string;
   title: string;
   content: string;
   author: string;
   createdAt: string;
+}
+
+export interface NewsInput {
+  title: string;
+  content: string;
+  author: string;
 }
 
 export interface TaxItem {
@@ -39,8 +62,24 @@ export interface TaxItem {
   status: TaxStatus;
 }
 
+export interface TaxInput {
+  citizenId: string;
+  propertyId?: string;
+  title: string;
+  amount: number;
+  dueDate: string;
+  status?: TaxStatus;
+}
+
 export interface PropertyItem {
   _id: string;
+  citizenId: string;
+  address: string;
+  propertyType: PropertyType;
+  details?: string;
+}
+
+export interface PropertyInput {
   citizenId: string;
   address: string;
   propertyType: PropertyType;
@@ -56,6 +95,14 @@ export interface AppointmentItem {
   status: AppointmentStatus;
 }
 
+export interface AppointmentInput {
+  citizenId: string;
+  department: string;
+  date: string;
+  purpose: string;
+  status?: AppointmentStatus;
+}
+
 export interface RequestItem {
   _id: string;
   citizenId: string;
@@ -67,10 +114,27 @@ export interface RequestItem {
   createdAt: string;
 }
 
+export interface RequestInput {
+  citizenId: string;
+  documentType: string;
+  proofFiles?: string[];
+  status?: RequestStatus;
+  adminComment?: string;
+  legalResponseDays: number;
+}
+
 export interface PublicDocumentItem {
   _id: string;
   title: string;
   description?: string | null;
+  category: string;
+  fileUrl: string;
+  uploadedBy: string;
+}
+
+export interface PublicDocumentInput {
+  title: string;
+  description?: string;
   category: string;
   fileUrl: string;
   uploadedBy: string;
