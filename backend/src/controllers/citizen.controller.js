@@ -3,14 +3,21 @@ import { Citizen } from '../models/citizen.model.js';
 export async function showAllCitizens(req, res, next) {
     try {
         const { limit, skip } = req.pagination;
+        const user = req.user;
+
+        // Citizens can only see themselves; employees and admins can see all
+        let filter = {};
+        if (user.role === 'citizen') {
+            filter = { _id: user.citizenId };
+        }
 
         const [items, total] = await Promise.all([
-            Citizen.find({})
+            Citizen.find(filter)
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
                 .select('_id firstName lastName'),
-            Citizen.countDocuments({})
+            Citizen.countDocuments(filter)
         ]);
 
         res.json({
@@ -22,6 +29,28 @@ export async function showAllCitizens(req, res, next) {
                 totalPages: Math.ceil(total / limit)
             }
         });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function getCitizenById(req, res, next) {
+    try {
+        const { id } = req.params;
+        const user = req.user;
+
+        // Citizens can only get their own record
+        if (user.role === 'citizen' && user.citizenId?.toString() !== id) {
+            return res.status(403).json({ error: 'Nu aveți permisiunea de a vizualiza datele altor cetățeni.' });
+        }
+
+        const citizen = await Citizen.findById(id);
+        
+        if (!citizen) {
+            return res.status(404).json({ error: 'Cetățeanul nu a fost găsit.' });
+        }
+
+        res.json({ data: citizen });
     } catch (err) {
         next(err);
     }
@@ -62,9 +91,20 @@ export async function updateCitizen(req, res, next) {
     try {
         const { id } = req.params;
         const updateData = req.sanitizedBody;
+        const user = req.user;
         
         if (Object.keys(updateData).length === 0) {
             return res.status(400).json({ error: 'No valid fields to update.' });
+        }
+
+        // Citizens can only update their own record
+        if (user.role === 'citizen' && user.citizenId?.toString() !== id) {
+            return res.status(403).json({ error: 'Nu puteți modifica datele altor cetățeni.' });
+        }
+
+        // Only super_admin can update citizen data (citizens can only update via their own endpoint)
+        if (user.role !== 'super_admin' && user.role !== 'citizen') {
+            return res.status(403).json({ error: 'Nu aveți permisiunea de a modifica datele cetățenilor.' });
         }
         
         const updated = await Citizen.findByIdAndUpdate(
@@ -77,7 +117,7 @@ export async function updateCitizen(req, res, next) {
             return res.status(404).json({ error: 'Resource not found.' });
         }
         
-        console.log(`[UPDATE] Citizen ${id} updated from IP ${req.ip}`);
+        console.log(`[UPDATE] Citizen ${id} updated by ${user.email} (${user.role}) from IP ${req.ip}`);
         
         res.json({ data: updated });
     } catch (err) {

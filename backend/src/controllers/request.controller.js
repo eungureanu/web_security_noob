@@ -4,8 +4,17 @@ export async function showAllRequests(req, res, next) {
     try {
         const { limit, skip } = req.pagination;
         const { citizenId } = req.query;
+        const user = req.user;
 
-        const filter = citizenId ? { citizenId } : {};
+        let filter = {};
+
+        // Citizens can only see their own requests
+        if (user.role === 'citizen') {
+            filter = { citizenId: user.citizenId };
+        } else if (citizenId) {
+            // Employees can filter by citizenId if provided
+            filter = { citizenId };
+        }
 
         const [items, total] = await Promise.all([
             Request.find(filter)

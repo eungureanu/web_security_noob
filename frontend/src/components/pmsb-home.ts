@@ -2,7 +2,7 @@ import { LitElement, html, unsafeCSS, type TemplateResult, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import tailwindStyles from "../styles/tailwind.css?inline";
-import { apiUrl, assetUrl } from "../config/api.config";
+import { apiUrl, assetUrl, API_BASE_URL } from "../config/api.config";
 import {
   type ApiResponse,
   type ApiSingleResponse,
@@ -22,6 +22,10 @@ import {
   type TabDataMap,
   type TaxItem,
   type TaxInput,
+  type AuthUser,
+  type AuthResponse,
+  type AuthMeResponse,
+  type UserRole,
   TAB_ENDPOINTS,
 } from "../types/pmsb.types";
 
@@ -61,16 +65,48 @@ const HOME_CONTENT = html`
   </section>
 `;
 
-const TABS: { id: string; label: string; isStatic?: boolean }[] = [
-  { id: "home", label: "Home", isStatic: true },
-  { id: "stiri", label: "Stiri" },
-  { id: "formulare-tip", label: "Formulare Tip" },
-  { id: "programari", label: "Programari" },
-  { id: "date-personale", label: "Date personale" },
-  { id: "proprietati", label: "Proprietati" },
-  { id: "cereri", label: "Cereri" },
-  { id: "taxe-impozite", label: "Taxe si Impozite" },
+interface TabConfig {
+  id: string;
+  label: string;
+  isStatic?: boolean;
+  isPublic?: boolean;
+  endpoint?: string;
+}
+
+const TABS: TabConfig[] = [
+  { id: "home", label: "Home", isStatic: true, isPublic: true },
+  { id: "stiri", label: "Stiri", isPublic: true, endpoint: "news" },
+  { id: "formulare-tip", label: "Formulare Tip", isPublic: true, endpoint: "public-documents" },
+  { id: "programari", label: "Programari", endpoint: "appointments" },
+  { id: "date-personale", label: "Date personale", endpoint: "citizens" },
+  { id: "proprietati", label: "Proprietati", endpoint: "properties" },
+  { id: "cereri", label: "Cereri", endpoint: "requests" },
+  { id: "taxe-impozite", label: "Taxe si Impozite", endpoint: "taxes" },
 ];
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  citizen: "Cetățean",
+  registry: "Angajat Registratură",
+  taxes: "Angajat Taxe",
+  super_admin: "Administrator",
+};
+
+type TabWritePermissions = {
+  [key in DataTabId]: UserRole[];
+};
+
+const TAB_WRITE_PERMISSIONS: TabWritePermissions = {
+  "stiri": ["registry", "taxes", "super_admin"],
+  "formulare-tip": ["registry", "taxes", "super_admin"],
+  "programari": ["citizen", "registry", "super_admin"],
+  "date-personale": ["citizen", "super_admin"],
+  "proprietati": ["registry", "super_admin"],
+  "cereri": ["registry", "super_admin"],
+  "taxe-impozite": ["taxes", "super_admin"],
+};
+
+const TABS_HIDDEN_FOR_REGISTRY: DataTabId[] = ["taxe-impozite"];
+const TABS_WRITE_ONLY_OWN: DataTabId[] = ["programari", "date-personale"];
 
 const PROPERTY_TYPE_LABELS: Record<PropertyItem["propertyType"], string> = {
   house: "Casă",
@@ -133,15 +169,216 @@ export class PmsbHome extends LitElement {
   @state()
   private citizens: CitizenItem[] = [];
 
+  @state()
+  private authUser: AuthUser | null = null;
+
+  @state()
+  private authToken: string | null = null;
+
+  @state()
+  private showLoginModal = false;
+
+  @state()
+  private loginError = "";
+
+  @state()
+  private isLoggingIn = false;
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    this.loadAuthFromStorage();
+  }
+
+  private loadAuthFromStorage(): void {
+    const token = localStorage.getItem("auth_token");
+    const userStr = localStorage.getItem("auth_user");
+    
+    if (token && userStr) {
+      try {
+        this.authToken = token;
+        this.authUser = JSON.parse(userStr);
+        void this.verifyToken();
+      } catch {
+        this.clearAuth();
+      }
+    }
+  }
+
+  private async verifyToken(): Promise<void> {
+    if (!this.authToken) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL.replace('/api', '')}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${this.authToken}` },
+      });
+
+      if (!response.ok) {
+        this.clearAuth();
+        return;
+      }
+
+      const result: AuthMeResponse = await response.json();
+      this.authUser = result.data.user;
+      localStorage.setItem("auth_user", JSON.stringify(this.authUser));
+    } catch {
+      this.clearAuth();
+    }
+  }
+
+  private clearAuth(): void {
+    this.authToken = null;
+    this.authUser = null;
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_user");
+  }
+
+  private async handleLogin(e: Event): Promise<void> {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+    
+    const email = (formData.get("email") as string).trim();
+    const password = formData.get("password") as string;
+
+    if (!email || !password) {
+      this.loginError = "Email și parola sunt obligatorii.";
+      return;
+    }
+
+    this.isLoggingIn = true;
+    this.loginError = "";
+
+    try {
+      const response = await fetch(`${API_BASE_URL.replace('/api', '')}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        this.loginError = result.error || "Eroare la autentificare.";
+        return;
+      }
+
+      const authResult = result as AuthResponse;
+      this.authToken = authResult.data.token;
+      this.authUser = authResult.data.user;
+      
+      localStorage.setItem("auth_token", this.authToken);
+      localStorage.setItem("auth_user", JSON.stringify(this.authUser));
+      
+      this.showLoginModal = false;
+      this.loginError = "";
+      
+      if (this.activeTab !== "home" && this.activeTab !== "stiri" && this.activeTab !== "formulare-tip") {
+        void this.fetchTabData(this.activeTab as DataTabId);
+      }
+    } catch {
+      this.loginError = "Eroare de conexiune. Verificați conexiunea la internet.";
+    } finally {
+      this.isLoggingIn = false;
+    }
+  }
+
+  private handleLogout(): void {
+    this.clearAuth();
+    this.tabData = [];
+    this.activeTab = "home";
+  }
+
+  private getAuthHeaders(): HeadersInit {
+    if (this.authToken) {
+      return {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.authToken}`,
+      };
+    }
+    return { "Content-Type": "application/json" };
+  }
+
+  private canViewTab(tabId: string): boolean {
+    const tab = TABS.find((t) => t.id === tabId);
+    if (!tab) return false;
+
+    if (tab.isPublic) return true;
+    if (!this.authUser) return false;
+
+    if (this.authUser.role === "registry" && TABS_HIDDEN_FOR_REGISTRY.includes(tabId as DataTabId)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private canWriteTab(tabId: DataTabId): boolean {
+    if (!this.authUser) return false;
+    
+    const allowedRoles = TAB_WRITE_PERMISSIONS[tabId];
+    return allowedRoles?.includes(this.authUser.role) ?? false;
+  }
+
+  private canEditItem(item: AnyItem, tabId: DataTabId): boolean {
+    if (!this.authUser) return false;
+    if (!this.canWriteTab(tabId)) return false;
+
+    if (this.authUser.role === "citizen" && TABS_WRITE_ONLY_OWN.includes(tabId)) {
+      if (tabId === "date-personale") {
+        return (item as CitizenItem)._id === this.authUser.citizenId;
+      }
+      const citizenItem = item as { citizenId?: string };
+      return citizenItem.citizenId === this.authUser.citizenId;
+    }
+
+    return true;
+  }
+
+  private canDeleteItem(item: AnyItem, tabId: DataTabId): boolean {
+    return this.canEditItem(item, tabId);
+  }
+
+  private canAddItem(tabId: DataTabId): boolean {
+    if (!this.authUser) return false;
+    
+    if (this.authUser.role === "citizen") {
+      return tabId === "programari";
+    }
+
+    return this.canWriteTab(tabId);
+  }
+
   private async fetchTabData<K extends DataTabId>(tabId: K): Promise<void> {
     const endpoint = TAB_ENDPOINTS[tabId];
+    const tab = TABS.find((t) => t.id === tabId);
 
     this.isLoading = true;
     this.errorMessage = "";
     this.tabData = [];
 
+    if (!tab?.isPublic && !this.authToken) {
+      this.errorMessage = "Trebuie să fiți autentificat pentru a accesa această secțiune.";
+      this.isLoading = false;
+      return;
+    }
+
     try {
-      const response = await fetch(apiUrl(endpoint));
+      const headers: HeadersInit = tab?.isPublic && !this.authToken 
+        ? {} 
+        : { Authorization: `Bearer ${this.authToken}` };
+
+      const response = await fetch(apiUrl(endpoint), { headers });
+
+      if (response.status === 401) {
+        this.errorMessage = "Sesiunea a expirat. Vă rugăm să vă autentificați din nou.";
+        this.clearAuth();
+        return;
+      }
+
+      if (response.status === 403) {
+        this.errorMessage = "Nu aveți permisiunea de a accesa această secțiune.";
+        return;
+      }
 
       if (!response.ok) {
         this.errorMessage = "Nu s-au putut încărca datele. Vă rugăm încercați din nou.";
@@ -158,8 +395,12 @@ export class PmsbHome extends LitElement {
   }
 
   private async fetchCitizens(): Promise<void> {
+    if (!this.authToken) return;
+
     try {
-      const response = await fetch(apiUrl("citizens"));
+      const response = await fetch(apiUrl("citizens"), {
+        headers: { Authorization: `Bearer ${this.authToken}` },
+      });
       if (response.ok) {
         const result: ApiResponse<CitizenItem> = await response.json();
         this.citizens = result.data;
@@ -174,9 +415,20 @@ export class PmsbHome extends LitElement {
     try {
       const response = await fetch(apiUrl(endpoint), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify(data),
       });
+
+      if (response.status === 401) {
+        this.errorMessage = "Sesiunea a expirat. Vă rugăm să vă autentificați din nou.";
+        this.clearAuth();
+        return false;
+      }
+
+      if (response.status === 403) {
+        this.errorMessage = "Nu aveți permisiunea de a efectua această acțiune.";
+        return false;
+      }
 
       if (!response.ok) {
         const error = await response.json();
@@ -198,9 +450,20 @@ export class PmsbHome extends LitElement {
     try {
       const response = await fetch(apiUrl(endpoint, id), {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify(data),
       });
+
+      if (response.status === 401) {
+        this.errorMessage = "Sesiunea a expirat. Vă rugăm să vă autentificați din nou.";
+        this.clearAuth();
+        return false;
+      }
+
+      if (response.status === 403) {
+        this.errorMessage = "Nu aveți permisiunea de a modifica această resursă.";
+        return false;
+      }
 
       if (!response.ok) {
         const error = await response.json();
@@ -226,7 +489,19 @@ export class PmsbHome extends LitElement {
     try {
       const response = await fetch(apiUrl(endpoint, id), {
         method: "DELETE",
+        headers: this.getAuthHeaders(),
       });
+
+      if (response.status === 401) {
+        this.errorMessage = "Sesiunea a expirat. Vă rugăm să vă autentificați din nou.";
+        this.clearAuth();
+        return false;
+      }
+
+      if (response.status === 403) {
+        this.errorMessage = "Nu aveți permisiunea de a șterge această resursă.";
+        return false;
+      }
 
       if (!response.ok) {
         const error = await response.json();
@@ -247,7 +522,10 @@ export class PmsbHome extends LitElement {
     this.formMode = "create";
     this.editingItem = null;
     this.errorMessage = "";
-    if (this.activeTab !== "stiri" && this.activeTab !== "formulare-tip" && this.activeTab !== "date-personale") {
+    
+    const needsCitizens = this.activeTab !== "stiri" && this.activeTab !== "formulare-tip" && this.activeTab !== "date-personale";
+    
+    if (needsCitizens && this.authUser?.role !== "citizen") {
       void this.fetchCitizens();
     }
   }
@@ -391,27 +669,55 @@ export class PmsbHome extends LitElement {
     }
   }
 
-  private renderActionButtons(item: AnyItem): TemplateResult {
+  private renderActionButtons(item: AnyItem): TemplateResult | typeof nothing {
+    if (!isDataTabId(this.activeTab)) return nothing;
+    
+    const canEdit = this.canEditItem(item, this.activeTab);
+    const canDelete = this.canDeleteItem(item, this.activeTab);
+    
+    if (!canEdit && !canDelete) return nothing;
+
     return html`
       <div class="flex gap-2 mt-3">
-        <button
-          @click=${() => this.openEditForm(item)}
-          class="px-3 py-1 text-sm font-medium text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
-        >
-          Editează
-        </button>
-        <button
-          @click=${() => this.handleDelete(item._id)}
-          class="px-3 py-1 text-sm font-medium text-red-600 bg-red-50 rounded hover:bg-red-100 transition-colors"
-          ?disabled=${this.isSubmitting}
-        >
-          Șterge
-        </button>
+        ${canEdit ? html`
+          <button
+            @click=${() => this.openEditForm(item)}
+            class="px-3 py-1 text-sm font-medium text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+          >
+            Editează
+          </button>
+        ` : nothing}
+        ${canDelete ? html`
+          <button
+            @click=${() => this.handleDelete(item._id)}
+            class="px-3 py-1 text-sm font-medium text-red-600 bg-red-50 rounded hover:bg-red-100 transition-colors"
+            ?disabled=${this.isSubmitting}
+          >
+            Șterge
+          </button>
+        ` : nothing}
       </div>
     `;
   }
 
   private renderCitizenSelect(selectedId?: string): TemplateResult {
+    if (this.authUser?.role === "citizen") {
+      const citizenId = this.authUser.citizenId || "";
+      const displayName = this.authUser.citizen 
+        ? `${this.authUser.citizen.firstName} ${this.authUser.citizen.lastName}`
+        : "Dumneavoastră";
+      
+      return html`
+        <input type="hidden" name="citizenId" value=${citizenId} />
+        <div class="block">
+          <span class="text-sm font-medium text-slate-700">Cetățean</span>
+          <p class="mt-1 px-3 py-2 bg-slate-100 border border-slate-200 rounded-md text-slate-700">
+            ${displayName}
+          </p>
+        </div>
+      `;
+    }
+
     return html`
       <label class="block">
         <span class="text-sm font-medium text-slate-700">Cetățean *</span>
@@ -847,7 +1153,10 @@ export class PmsbHome extends LitElement {
     }
   }
 
-  private renderAddButton(): TemplateResult {
+  private renderAddButton(): TemplateResult | typeof nothing {
+    if (!isDataTabId(this.activeTab)) return nothing;
+    if (!this.canAddItem(this.activeTab)) return nothing;
+
     return html`
       <button
         @click=${() => this.openCreateForm()}
@@ -860,9 +1169,24 @@ export class PmsbHome extends LitElement {
   }
 
   private handleTabClick(tabId: string): void {
-    this.activeTab = tabId;
     const clickedTab = TABS.find((t) => t.id === tabId);
-    if (clickedTab && !clickedTab.isStatic && isDataTabId(tabId)) {
+    
+    if (!clickedTab) return;
+
+    if (!clickedTab.isPublic && !this.authUser) {
+      this.showLoginModal = true;
+      return;
+    }
+
+    if (!this.canViewTab(tabId)) {
+      this.errorMessage = "Nu aveți permisiunea de a accesa această secțiune.";
+      return;
+    }
+
+    this.activeTab = tabId;
+    this.errorMessage = "";
+    
+    if (!clickedTab.isStatic && isDataTabId(tabId)) {
       void this.fetchTabData(tabId);
     }
   }
@@ -1073,34 +1397,138 @@ export class PmsbHome extends LitElement {
     return this.renderDataTabContent();
   }
 
+  private renderLoginModal(): TemplateResult | typeof nothing {
+    if (!this.showLoginModal) return nothing;
+
+    return html`
+      <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full">
+          <div class="flex justify-between items-center p-4 border-b border-slate-200">
+            <h3 class="text-lg font-semibold text-slate-800">Autentificare</h3>
+            <button
+              @click=${() => { this.showLoginModal = false; this.loginError = ""; }}
+              class="text-slate-400 hover:text-slate-600 text-2xl leading-none"
+            >
+              &times;
+            </button>
+          </div>
+          
+          <form @submit=${this.handleLogin} class="p-4 space-y-4">
+            ${this.loginError
+              ? html`<p class="text-red-500 text-sm bg-red-50 p-2 rounded">${this.loginError}</p>`
+              : nothing}
+            
+            <label class="block">
+              <span class="text-sm font-medium text-slate-700">Email</span>
+              <input
+                type="email"
+                name="email"
+                required
+                autocomplete="email"
+                class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                placeholder="exemplu@email.ro"
+              />
+            </label>
+            
+            <label class="block">
+              <span class="text-sm font-medium text-slate-700">Parolă</span>
+              <input
+                type="password"
+                name="password"
+                required
+                autocomplete="current-password"
+                class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                placeholder="••••••••"
+              />
+            </label>
+            
+            <button
+              type="submit"
+              ?disabled=${this.isLoggingIn}
+              class="w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50"
+            >
+              ${this.isLoggingIn ? "Se autentifică..." : "Autentificare"}
+            </button>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderAuthSection(): TemplateResult {
+    if (this.authUser) {
+      const displayName = this.authUser.citizen 
+        ? `${this.authUser.citizen.firstName} ${this.authUser.citizen.lastName}`
+        : this.authUser.email;
+      
+      return html`
+        <div class="flex items-center gap-3">
+          <div class="text-right">
+            <p class="text-sm font-medium text-slate-700">${displayName}</p>
+            <p class="text-xs text-slate-500">${ROLE_LABELS[this.authUser.role]}</p>
+          </div>
+          <button
+            @click=${() => this.handleLogout()}
+            class="px-3 py-1.5 text-sm font-medium text-slate-600 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors"
+          >
+            Deconectare
+          </button>
+        </div>
+      `;
+    }
+
+    return html`
+      <button
+        @click=${() => { this.showLoginModal = true; }}
+        class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
+      >
+        Autentificare
+      </button>
+    `;
+  }
+
+  private renderVisibleTabs(): TemplateResult {
+    const visibleTabs = TABS.filter((tab) => {
+      if (tab.isPublic) return true;
+      if (!this.authUser) return false;
+      return this.canViewTab(tab.id);
+    });
+
+    return html`
+      ${repeat(
+        visibleTabs,
+        (tab) => tab.id,
+        (tab) => html`
+          <li>
+            <button
+              @click=${() => this.handleTabClick(tab.id)}
+              class="px-3 py-2.5 text-sm font-medium rounded-t-md transition-colors cursor-pointer
+                ${this.activeTab === tab.id
+                  ? "bg-slate-800 text-white"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}"
+            >
+              ${tab.label}
+              ${!tab.isPublic && !this.authUser ? html`<span class="ml-1 text-xs">🔒</span>` : nothing}
+            </button>
+          </li>
+        `
+      )}
+    `;
+  }
+
   render() {
     return html`
       <div class="min-h-screen bg-slate-50">
         <header class="bg-white border-b border-slate-200 shadow-sm">
-          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex justify-between items-center">
             <h1 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
               Primaria Miercurea Sibiului
             </h1>
+            ${this.renderAuthSection()}
           </div>
           <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <ul class="flex flex-wrap gap-1 border-t border-slate-100 pt-1">
-              ${repeat(
-                TABS,
-                (tab) => tab.id,
-                (tab) => html`
-                  <li>
-                    <button
-                      @click=${() => this.handleTabClick(tab.id)}
-                      class="px-3 py-2.5 text-sm font-medium rounded-t-md transition-colors cursor-pointer
-                        ${this.activeTab === tab.id
-                          ? "bg-slate-800 text-white"
-                          : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}"
-                    >
-                      ${tab.label}
-                    </button>
-                  </li>
-                `
-              )}
+              ${this.renderVisibleTabs()}
             </ul>
           </nav>
         </header>
@@ -1110,6 +1538,7 @@ export class PmsbHome extends LitElement {
         </main>
         
         ${this.renderFormModal()}
+        ${this.renderLoginModal()}
       </div>
     `;
   }

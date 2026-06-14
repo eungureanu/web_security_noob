@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { validateObjectId, validateRequestBody, isValidString, isValidPositiveNumber, isValidEnum } from '../middleware/security.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
 import { showAllRequests, createRequest, updateRequest, deleteRequest } from '../controllers/request.controller.js';
 
 const router = Router();
@@ -16,20 +17,28 @@ const REQUEST_VALIDATORS = {
     legalResponseDays: (v) => isValidPositiveNumber(v) && v >= 1
 };
 
-router.get('/', validateObjectId('citizenId'), showAllRequests);
+// Authenticated users can read requests (citizens see only their own)
+router.get('/', requireAuth, validateObjectId('citizenId'), showAllRequests);
 
+// Only registry + super_admin can create/edit/delete requests
 router.post('/',
+    requireAuth,
+    requireRole('registry', 'super_admin'),
     validateRequestBody(REQUEST_ALLOWED_FIELDS, REQUEST_REQUIRED_FIELDS, REQUEST_VALIDATORS),
     createRequest
 );
 
 router.put('/:id',
+    requireAuth,
+    requireRole('registry', 'super_admin'),
     validateObjectId('id'),
     validateRequestBody(REQUEST_ALLOWED_FIELDS, [], REQUEST_VALIDATORS),
     updateRequest
 );
 
 router.delete('/:id',
+    requireAuth,
+    requireRole('registry', 'super_admin'),
     validateObjectId('id'),
     deleteRequest
 );

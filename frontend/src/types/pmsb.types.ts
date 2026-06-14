@@ -18,6 +18,43 @@ export interface ApiDeleteResponse {
   message: string;
 }
 
+export type UserRole = "citizen" | "registry" | "taxes" | "super_admin";
+
+export interface UserPermissions {
+  canRead: string[];
+  canWrite: string[];
+  canReadAll: boolean;
+}
+
+export interface CitizenInfo {
+  _id: string;
+  firstName: string;
+  lastName: string;
+}
+
+export interface AuthUser {
+  _id: string;
+  email: string;
+  role: UserRole;
+  citizenId?: string | null;
+  citizen?: CitizenInfo | null;
+}
+
+export interface AuthResponse {
+  data: {
+    user: AuthUser;
+    token: string;
+    permissions: UserPermissions;
+  };
+}
+
+export interface AuthMeResponse {
+  data: {
+    user: AuthUser;
+    permissions: UserPermissions;
+  };
+}
+
 export type TaxStatus = "pending" | "paid";
 export type PropertyType = "house" | "land" | "car";
 export type AppointmentStatus = "scheduled" | "completed" | "cancelled";
